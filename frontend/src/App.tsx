@@ -207,10 +207,9 @@ export const App: React.FC = () => {
     if (!el) return;
     const updateSize = () => {
       const rect = el.getBoundingClientRect();
-      // Chừa nhỏ 2 bên; dải quân bắt nằm chung hàng PlayerCard (không chiếm thêm ngang)
       const availW = rect.width - 24;
-      // Trừ 2 PlayerCard + dải quân có thể wrap thêm 1 hàng + gap
-      const availH = rect.height - 64 - 100;
+      // Trừ 2 PlayerCard + gap (dải quân bắt overlay trên góc bàn, không chiếm chỗ)
+      const availH = rect.height - 64;
       const optimal = Math.max(280, Math.floor(Math.min(availW, availH)));
       setBoardSize(optimal);
     };
@@ -1030,15 +1029,9 @@ export const App: React.FC = () => {
         >
           {activeTab === 'play' && (
             <div className="flex flex-col items-center gap-1.5">
-              {/* Trên: thẻ người chơi trái · quân topSide đã bắt (phải) */}
-              <div
-                style={{ width: boardSize }}
-                className="flex items-center justify-between gap-2"
-              >
-                <div className="flex-1 min-w-0">
-                  <PlayerCard {...playerCardProps(topSide)} />
-                </div>
-                <CapturedStrip {...stripProps(topSide)} />
+              {/* Trên: thẻ người chơi của bên ở trên bàn */}
+              <div style={{ width: boardSize }}>
+                <PlayerCard {...playerCardProps(topSide)} />
               </div>
 
               <div
@@ -1093,17 +1086,21 @@ export const App: React.FC = () => {
                       </button>
                     </div>
                   )}
+
+                  {/* Quân topSide đã bắt — góc trên phải của bàn cờ */}
+                  <div className="absolute top-1 right-1 z-10 pointer-events-none">
+                    <CapturedStrip {...stripProps(topSide)} />
+                  </div>
+
+                  {/* Quân bottomSide đã bắt — góc dưới trái của bàn cờ */}
+                  <div className="absolute bottom-1 left-1 z-10 pointer-events-none">
+                    <CapturedStrip {...stripProps(bottomSide)} />
+                  </div>
                 </div>
 
-                {/* Dưới: quân bottomSide đã bắt (trái) · thẻ người chơi phải */}
-                <div
-                  style={{ width: boardSize }}
-                  className="flex items-center justify-between gap-2"
-                >
-                  <CapturedStrip {...stripProps(bottomSide)} />
-                  <div className="flex-1 min-w-0 flex justify-end">
-                    <PlayerCard {...playerCardProps(bottomSide)} />
-                  </div>
+                {/* Dưới: thẻ người chơi của bên ở dưới bàn */}
+                <div style={{ width: boardSize }}>
+                  <PlayerCard {...playerCardProps(bottomSide)} />
                 </div>
               </div>
           )}

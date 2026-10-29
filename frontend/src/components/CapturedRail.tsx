@@ -11,9 +11,9 @@ interface CapturedStripProps {
 }
 
 /**
- * Dải quân đối phương đã bị bắt, đặt trên-phải / dưới-trái cạnh bàn cờ
- * (ngay hàng với PlayerCard). Quân có kích thước ~1/3 quân cờ thật,
- * tự xuống hàng mới khi hết chỗ trong hàng hiện tại.
+ * Dải quân đối phương đã bị bắt, overlay ở góc trên-phải / dưới-trái
+ * của chính bàn cờ. Quân có kích thước ~1/3 quân cờ thật, flex-wrap
+ * xuống hàng mới khi hết chỗ trong hàng hiện tại.
  */
 export const CapturedStrip: React.FC<CapturedStripProps> = ({
   side,
@@ -23,11 +23,12 @@ export const CapturedStrip: React.FC<CapturedStripProps> = ({
 }) => {
   // ~1/3 kích cỡ một ô (quân thật) trên bàn cờ
   const piecePx = Math.max(13, Math.round(boardSize / 8 / 3));
-  const maxStripWidth = Math.round(boardSize * 0.52);
+  const maxStripWidth = Math.round(boardSize * 0.5);
 
   return (
     <div
-      className="flex flex-wrap items-center gap-x-1 gap-y-0.5 shrink-1 min-w-0 select-none"
+      className="flex flex-wrap items-center gap-x-1 gap-y-0.5 select-none
+                 bg-[#0c0c0e]/60 backdrop-blur-[2px] rounded px-1.5 py-0.5"
       style={{ maxWidth: maxStripWidth }}
       title={
         side === 'w'
