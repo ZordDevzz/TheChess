@@ -1029,9 +1029,9 @@ export const App: React.FC = () => {
           className="relative flex-1 min-w-0 min-h-0 h-full bg-[#0c0c0e] flex items-center justify-center p-4 overflow-hidden"
         >
           {activeTab === 'play' && (
-            /* 3 cột: bar quân bắt trái (đáy) · cột giữa (tên + bàn + tên) · bar phải (đỉnh) */
+            /* 3 cột: bar quân bắt trái (đáy,=topSide) · cột giữa (tên + bàn + tên) · bar phải (đỉnh,=bottomSide) */
             <div className="flex items-center gap-3">
-              <CapturedBar {...capturedBarProps(bottomSide, 'bottom')} />
+              <CapturedBar {...capturedBarProps(topSide, 'bottom')} />
 
               <div className="flex flex-col items-center gap-1.5">
                 {/* Trên: thẻ người chơi của bên ở trên bàn */}
@@ -1099,7 +1099,7 @@ export const App: React.FC = () => {
                 </div>
               </div>
 
-              <CapturedBar {...capturedBarProps(topSide, 'top')} />
+              <CapturedBar {...capturedBarProps(bottomSide, 'top')} />
             </div>
           )}
 
