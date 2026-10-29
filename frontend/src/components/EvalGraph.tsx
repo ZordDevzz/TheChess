@@ -7,9 +7,11 @@ interface EvalGraphProps {
   onSelectPly: (ply: number) => void;
   reviewResult: GameReviewResult | null;
   isReviewing: boolean;
-  onRunReview: () => void;
-  onOpenReview: () => void;
-  canReview: boolean;
+  onRunReview?: () => void;
+  onOpenReview?: () => void;
+  canReview?: boolean;
+  /** Đặt khi nhúng bên trong chế độ phân tích (ẩn các nút trùng lặp) */
+  embedded?: boolean;
 }
 
 /** Biểu đồ lợi thế + nút chạy/mở màn hình Game Review chi tiết. */
@@ -21,7 +23,8 @@ export const EvalGraph: React.FC<EvalGraphProps> = ({
   isReviewing,
   onRunReview,
   onOpenReview,
-  canReview,
+  canReview = true,
+  embedded = false,
 }) => {
   const width = 460;
   const height = 76;
@@ -50,7 +53,7 @@ export const EvalGraph: React.FC<EvalGraphProps> = ({
   return (
     <div className="shrink-0 bg-[#111114] p-3.5 space-y-2">
       <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2 text-[11px] text-zinc-400 min-w-0">
+        <div className="flex items-center gap-2 text-xs text-zinc-400 min-w-0">
           <span className="font-medium text-zinc-300">Biểu đồ lợi thế</span>
           {reviewResult && (
             <span className="font-mono text-emerald-400 font-semibold shrink-0">
@@ -59,28 +62,32 @@ export const EvalGraph: React.FC<EvalGraphProps> = ({
           )}
         </div>
 
-        <div className="flex items-center gap-1.5 shrink-0">
-          {reviewResult && (
-            <button
-              onClick={onOpenReview}
-              className="px-2 py-0.5 rounded bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-[11px] text-zinc-300 cursor-pointer"
-            >
-              Chi tiết
-            </button>
-          )}
-          <button
-            onClick={onRunReview}
-            disabled={isReviewing || moves.length === 0 || !canReview}
-            title={
-              canReview
-                ? 'Chấm điểm toàn ván bằng engine'
-                : 'Bị tắt khi đang thi đấu (chế độ chơi với máy)'
-            }
-            className="px-2.5 py-0.5 rounded bg-zinc-200 hover:bg-white disabled:bg-zinc-900 disabled:text-zinc-600 text-[11px] font-medium text-zinc-950 transition cursor-pointer"
-          >
-            {isReviewing ? 'Đang chấm...' : 'Game Review'}
-          </button>
-        </div>
+        {!embedded && (
+          <div className="flex items-center gap-1.5 shrink-0">
+            {reviewResult && onOpenReview && (
+              <button
+                onClick={onOpenReview}
+                className="px-2 py-0.5 rounded bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-xs text-zinc-300 cursor-pointer"
+              >
+                Chi tiết
+              </button>
+            )}
+            {onRunReview && (
+              <button
+                onClick={onRunReview}
+                disabled={isReviewing || moves.length === 0 || !canReview}
+                title={
+                  canReview
+                    ? 'Chấm điểm toàn ván bằng engine'
+                    : 'Bị tắt khi đang thi đấu (chế độ chơi với máy)'
+                }
+                className="px-2.5 py-0.5 rounded bg-zinc-200 hover:bg-white disabled:bg-zinc-900 disabled:text-zinc-600 text-xs font-medium text-zinc-950 transition cursor-pointer"
+              >
+                {isReviewing ? 'Đang chấm...' : 'Game Review'}
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Biểu đồ có chấm màu định hướng các bước ngoặt */}

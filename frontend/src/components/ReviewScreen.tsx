@@ -8,7 +8,6 @@ import {
 } from '../types';
 
 interface ReviewScreenProps {
-  open: boolean;
   onClose: () => void;
   moves: MoveRecord[];
   currentPly: number;
@@ -47,12 +46,11 @@ function formatScore(line: { cp: number | null; mate: number | null }): string {
 }
 
 /**
- * Màn hình phân tích toàn ván: tổng quan (accuracy + thống kê),
- * danh sách nước có badge phân loại, panel chi tiết từng nước với
- * phân tích lại thế cờ theo yêu cầu (PV lines).
+ * Chế độ "Phân tích ván đấu" của sidebar: tổng quan accuracy + thống kê,
+ * danh sách nước có badge, panel chi tiết từng nước với phân tích lại
+ * thế cờ theo yêu cầu (PV lines). Bàn cờ bên trái vẫn đồng bộ theo nước chọn.
  */
 export const ReviewScreen: React.FC<ReviewScreenProps> = ({
-  open,
   onClose,
   moves,
   currentPly,
@@ -70,9 +68,7 @@ export const ReviewScreen: React.FC<ReviewScreenProps> = ({
   // Đổi nước chọn -> xóa phân tích chi tiết cũ
   useEffect(() => {
     setDetail(null);
-  }, [currentPly, open]);
-
-  if (!open) return null;
+  }, [currentPly]);
 
   const runDetailAnalysis = async () => {
     if (!selectedMove) return;
@@ -112,7 +108,7 @@ export const ReviewScreen: React.FC<ReviewScreenProps> = ({
     m ? (
       <button
         onClick={() => onSelectPly(m.ply)}
-        className={`text-left px-1.5 py-0.5 rounded font-mono text-[11px] flex items-center justify-between gap-1 w-full transition cursor-pointer ${
+        className={`text-left px-2 py-1 rounded font-mono text-xs flex items-center justify-between gap-1.5 w-full transition cursor-pointer ${
           currentPly === m.ply
             ? 'bg-zinc-700 text-zinc-50 font-semibold ring-1 ring-zinc-500'
             : 'text-zinc-300 hover:bg-zinc-800/70'
@@ -121,7 +117,7 @@ export const ReviewScreen: React.FC<ReviewScreenProps> = ({
         <span className="truncate">{m.san}</span>
         {m.classification && m.color && (
           <span
-            className="shrink-0 w-1.5 h-1.5 rounded-full"
+            className="shrink-0 w-2 h-2 rounded-full"
             style={{ backgroundColor: m.color }}
             title={m.classification}
           />
@@ -132,294 +128,285 @@ export const ReviewScreen: React.FC<ReviewScreenProps> = ({
     );
 
   return (
-    <div
-      className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4"
-      onClick={onClose}
-    >
-      <div
-        className="bg-[#121215] border border-zinc-800 rounded-xl w-full max-w-4xl h-[85vh] flex flex-col shadow-2xl overflow-hidden"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="shrink-0 flex items-center justify-between px-4 py-3 border-b border-zinc-800">
-          <div className="flex items-center gap-2.5">
-            <h3 className="text-sm font-semibold text-zinc-100">
-              Phân tích ván đấu
-            </h3>
-            {isReviewing ? (
-              <span className="flex items-center gap-1 text-[11px] font-mono text-emerald-400">
-                <Loader2 className="w-3 h-3 animate-spin" />
-                {reviewProgress
-                  ? `${reviewProgress.done}/${reviewProgress.total} nước`
-                  : 'Đang chấm...'}
-              </span>
-            ) : reviewResult ? (
-              <span className="text-[11px] font-mono text-zinc-400">
-                W {reviewResult.white_accuracy}% · B {reviewResult.black_accuracy}%
-              </span>
-            ) : null}
-          </div>
-          <div className="flex items-center gap-1.5">
-            <button
-              onClick={onRunReview}
-              disabled={isReviewing || moves.length === 0}
-              className="px-2.5 py-1 rounded bg-zinc-200 hover:bg-white disabled:bg-zinc-900 disabled:text-zinc-600 text-[11px] font-medium text-zinc-950 transition cursor-pointer"
-            >
-              {isReviewing
-                ? 'Đang chấm...'
-                : reviewResult
-                ? 'Chấm lại'
-                : 'Chấm điểm ván đấu'}
-            </button>
-            <button
-              onClick={onClose}
-              className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-100 cursor-pointer"
-              aria-label="Đóng"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
+    <div className="flex-1 min-h-0 flex flex-col bg-[#111114] overflow-hidden">
+      {/* Header */}
+      <div className="shrink-0 flex items-center justify-between gap-2 px-3.5 py-3 border-b border-zinc-800/80">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <h3 className="text-sm font-semibold text-zinc-100 shrink-0">
+            Phân tích ván đấu
+          </h3>
+          {isReviewing ? (
+            <span className="flex items-center gap-1 text-xs font-mono text-emerald-400 truncate">
+              <Loader2 className="w-3 h-3 animate-spin shrink-0" />
+              {reviewProgress
+                ? `${reviewProgress.done}/${reviewProgress.total} nước`
+                : 'Đang chấm...'}
+            </span>
+          ) : reviewResult ? (
+            <span className="text-xs font-mono text-zinc-400 truncate">
+              W {reviewResult.white_accuracy}% · B {reviewResult.black_accuracy}%
+            </span>
+          ) : null}
         </div>
+        <div className="flex items-center gap-1.5 shrink-0">
+          <button
+            onClick={onRunReview}
+            disabled={isReviewing || moves.length === 0}
+            className="px-2.5 py-1 rounded bg-zinc-200 hover:bg-white disabled:bg-zinc-900 disabled:text-zinc-600 text-xs font-medium text-zinc-950 transition cursor-pointer"
+          >
+            {isReviewing
+              ? 'Đang chấm...'
+              : reviewResult
+              ? 'Chấm lại'
+              : 'Chấm điểm'}
+          </button>
+          <button
+            onClick={onClose}
+            className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-100 cursor-pointer"
+            title="Thoát chế độ phân tích"
+            aria-label="Đóng"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
 
-        {/* Body 3 cột */}
-        <div className="flex-1 min-h-0 grid grid-cols-1 md:grid-cols-[210px_minmax(0,1fr)_270px] overflow-hidden">
-          {/* Cột 1: tổng quan */}
-          <div className="hidden md:flex flex-col border-r border-zinc-800/80 overflow-y-auto p-3 gap-3">
+      {moves.length === 0 ? (
+        <div className="flex-1 flex items-center justify-center text-xs text-zinc-600 px-6 text-center">
+          Chưa có nước đi nào để phân tích.
+        </div>
+      ) : (
+        <>
+          {/* Tổng quan: accuracy + thống kê nước đi */}
+          <div className="shrink-0 p-3 space-y-2.5 border-b border-zinc-800/80">
             <div className="grid grid-cols-2 gap-2 text-center">
               <div className="bg-zinc-950 rounded-lg border border-zinc-800/80 py-2">
-                <div className="text-[10px] text-zinc-400">⬜ Trắng</div>
-                <div className="text-lg font-mono font-bold text-emerald-400">
+                <div className="text-[11px] text-zinc-400">⬜ Trắng</div>
+                <div className="text-xl font-mono font-bold text-emerald-400">
                   {reviewResult ? `${reviewResult.white_accuracy}%` : '—'}
                 </div>
               </div>
               <div className="bg-zinc-950 rounded-lg border border-zinc-800/80 py-2">
-                <div className="text-[10px] text-zinc-400">⬛ Đen</div>
-                <div className="text-lg font-mono font-bold text-emerald-400">
+                <div className="text-[11px] text-zinc-400">⬛ Đen</div>
+                <div className="text-xl font-mono font-bold text-emerald-400">
                   {reviewResult ? `${reviewResult.black_accuracy}%` : '—'}
                 </div>
               </div>
             </div>
-            <div className="text-[10px] uppercase tracking-widest text-zinc-600 px-0.5">
-              Thống kê nước đi
-            </div>
             {reviewResult ? (
-              CLASS_ORDER.map((item) => {
-                const wCount = reviewResult.counts.w[item.key] ?? 0;
-                const bCount = reviewResult.counts.b[item.key] ?? 0;
-                return (
-                  <div
-                    key={item.key}
-                    className="flex items-center gap-2 text-[11px]"
-                  >
-                    <span
-                      className="inline-flex items-center justify-center w-4 h-4 rounded-full font-mono text-[9px] font-bold text-zinc-950 shrink-0"
-                      style={{ backgroundColor: item.color }}
-                    >
-                      {item.symbol}
-                    </span>
-                    <span className="flex-1 text-zinc-300">{item.label}</span>
-                    <span className="font-mono text-zinc-400">
-                      {wCount} · {bCount}
-                    </span>
-                  </div>
-                );
-              })
-            ) : (
-              <div className="text-[11px] text-zinc-600 leading-relaxed">
-                Chưa có dữ liệu. Bấm "Chấm điểm ván đấu" để engine đánh giá từng
-                nước.
+              <div className="grid grid-cols-3 gap-x-3 gap-y-1.5">
+                {CLASS_ORDER.map((item) => {
+                  const wCount = reviewResult.counts.w[item.key] ?? 0;
+                  const bCount = reviewResult.counts.b[item.key] ?? 0;
+                  return (
+                    <div key={item.key} className="flex items-center gap-1.5 text-[11px]">
+                      <span
+                        className="inline-flex items-center justify-center w-[18px] h-[18px] rounded-full font-mono text-[10px] font-bold text-zinc-950 shrink-0"
+                        style={{ backgroundColor: item.color }}
+                      >
+                        {item.symbol}
+                      </span>
+                      <span className="text-zinc-400 truncate flex-1">
+                        {item.label}
+                      </span>
+                      <span className="font-mono text-zinc-300 shrink-0">
+                        {wCount}·{bCount}
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
+            ) : (
+              !isReviewing && (
+                <div className="text-xs text-zinc-500 leading-relaxed text-center py-1">
+                  Chưa có dữ liệu. Bấm <strong className="text-zinc-300">Chấm điểm</strong>{' '}
+                  để engine đánh giá từng nước.
+                </div>
+              )
             )}
           </div>
 
-          {/* Cột 2: danh sách nước */}
-          <div className="min-h-0 overflow-y-auto border-r border-zinc-800/80">
-            {pairs.length === 0 ? (
-              <div className="h-full flex items-center justify-center text-[11px] text-zinc-600 px-6 text-center">
-                Chưa có nước đi nào để phân tích.
-              </div>
-            ) : (
-              pairs.map((pair) => (
+          {/* Hai pane: danh sách nước | chi tiết */}
+          <div className="flex-1 min-h-0 grid grid-cols-1 md:grid-cols-2 overflow-hidden">
+            {/* Danh sách nước */}
+            <div className="min-h-0 overflow-y-auto border-r border-zinc-800/60">
+              {pairs.map((pair) => (
                 <div
                   key={pair.moveNumber}
-                  className="grid grid-cols-[2.2rem_1fr_1fr] items-center gap-1 px-2.5 py-1 border-b border-zinc-900/60 hover:bg-zinc-900/30"
+                  className="grid grid-cols-[2.4rem_1fr_1fr] items-center gap-1.5 px-2.5 py-1 border-b border-zinc-900/60 hover:bg-zinc-900/30"
                 >
-                  <span className="text-zinc-600 font-mono text-[10px] tabular-nums">
+                  <span className="text-zinc-600 font-mono text-[11px] tabular-nums">
                     {pair.moveNumber}.
                   </span>
                   {renderMoveCell(pair.white)}
                   {renderMoveCell(pair.black)}
                 </div>
-              ))
-            )}
-          </div>
+              ))}
+            </div>
 
-          {/* Cột 3: chi tiết nước đang chọn */}
-          <div className="min-h-0 overflow-y-auto p-3 space-y-3">
-            {!selectedMove ? (
-              <div className="h-full flex items-center justify-center text-[11px] text-zinc-600 text-center px-4">
-                Chọn một nước trong danh sách để xem chi tiết.
-              </div>
-            ) : !selectedMove.classification ? (
-              <div className="space-y-3 text-center">
-                <div className="font-mono text-sm text-zinc-200">
-                  {selectedMove.moveNumber}
-                  {selectedMove.turn === 'w' ? '.' : '...'}{' '}
-                  {selectedMove.san}
+            {/* Chi tiết nước đang chọn */}
+            <div className="min-h-0 overflow-y-auto p-3 space-y-3">
+              {!selectedMove ? (
+                <div className="h-full flex items-center justify-center text-xs text-zinc-600 text-center px-3">
+                  Chọn một nước trong danh sách (hoặc bấm ←/→) để xem chi tiết.
                 </div>
-                <div className="text-[11px] text-zinc-500 leading-relaxed">
-                  Nước này chưa được chấm điểm. Chạy "Chấm điểm ván đấu" để xem
-                  phân loại & độ chính xác từng nước.
-                </div>
-              </div>
-            ) : (
-              <>
-                {/* Header nước đi */}
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span
-                      className="inline-flex items-center justify-center w-5 h-5 rounded-full text-[11px] font-bold text-zinc-950 shrink-0"
-                      style={{ backgroundColor: selectedMove.color }}
-                    >
-                      {selectedMove.symbol}
-                    </span>
-                    <span className="font-mono font-bold text-white text-sm truncate">
-                      {selectedMove.moveNumber}
-                      {selectedMove.turn === 'w' ? '.' : '...'}{' '}
-                      {selectedMove.san}
-                    </span>
+              ) : !selectedMove.classification ? (
+                <div className="space-y-3 text-center py-4">
+                  <div className="font-mono text-sm text-zinc-200">
+                    {selectedMove.moveNumber}
+                    {selectedMove.turn === 'w' ? '.' : '...'} {selectedMove.san}
                   </div>
-                  <div className="flex items-center gap-1 shrink-0">
-                    <button
-                      onClick={() =>
-                        onSelectPly(Math.max(1, currentPly - 1))
-                      }
-                      disabled={currentPly <= 1}
-                      className="p-1 rounded bg-zinc-900 hover:bg-zinc-800 disabled:opacity-30 border border-zinc-800 text-zinc-300 cursor-pointer"
-                      title="Nước trước"
-                    >
-                      <ChevronLeft className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      onClick={() =>
-                        onSelectPly(Math.min(moves.length, currentPly + 1))
-                      }
-                      disabled={currentPly >= moves.length}
-                      className="p-1 rounded bg-zinc-900 hover:bg-zinc-800 disabled:opacity-30 border border-zinc-800 text-zinc-300 cursor-pointer"
-                      title="Nước sau"
-                    >
-                      <ChevronRight className="w-3.5 h-3.5" />
-                    </button>
+                  <div className="text-xs text-zinc-500 leading-relaxed">
+                    Nước này chưa được chấm điểm. Bấm{' '}
+                    <strong className="text-zinc-300">Chấm điểm</strong> để xem phân
+                    loại &amp; độ chính xác từng nước.
                   </div>
                 </div>
-
-                {/* Thanh win% trước/sau */}
-                {beforeWin !== null && afterWin !== undefined && (
-                  <div className="space-y-1">
-                    <div className="flex justify-between text-[10px] font-mono text-zinc-400">
-                      <span>Trước: {beforeWin.toFixed(1)}%</span>
-                      <span>Sau: {afterWin.toFixed(1)}%</span>
-                    </div>
-                    <div className="relative w-full h-3 rounded-full bg-zinc-900 border border-zinc-800 overflow-hidden">
-                      <div
-                        className="absolute inset-y-0 bg-zinc-200"
-                        style={{ width: `${beforeWin}%` }}
-                      />
-                      <div
-                        className="absolute inset-y-0 w-[2px] bg-sky-400"
-                        style={{ left: `${afterWin}%` }}
-                        title={`Sau khi đi: ${afterWin.toFixed(1)}%`}
-                      />
-                    </div>
-                    <div className="flex justify-between text-[10px] font-mono">
+              ) : (
+                <>
+                  {/* Header nước đi + điều hướng */}
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
                       <span
-                        className={
-                          (selectedMove.winLoss ?? 0) > 1
-                            ? 'text-rose-300'
-                            : 'text-emerald-300'
-                        }
+                        className="inline-flex items-center justify-center w-5 h-5 rounded-full text-[11px] font-bold text-zinc-950 shrink-0"
+                        style={{ backgroundColor: selectedMove.color }}
                       >
-                        {selectedMove.turn === 'w' ? 'Trắng' : 'Đen'} mất{' '}
-                        {(selectedMove.winLoss ?? 0).toFixed(1)}% cơ hội thắng
+                        {selectedMove.symbol}
                       </span>
-                      <span className="text-zinc-400">
-                        Chuẩn {selectedMove.accuracy}%
-                      </span>
-                    </div>
-                  </div>
-                )}
-
-                {/* Nước tối ưu */}
-                {selectedMove.bestMoveSan &&
-                  selectedMove.bestMoveUci !== selectedMove.uci && (
-                    <div className="bg-zinc-950 rounded-md border border-zinc-800/80 px-2.5 py-2 flex items-center justify-between">
-                      <span className="text-[10px] text-zinc-400">
-                        Nước tối ưu
-                      </span>
-                      <span className="text-xs font-mono font-bold text-emerald-400">
-                        {selectedMove.bestMoveSan}
+                      <span className="font-mono font-bold text-white text-sm truncate">
+                        {selectedMove.moveNumber}
+                        {selectedMove.turn === 'w' ? '.' : '...'} {selectedMove.san}
                       </span>
                     </div>
-                  )}
-
-                {/* Phân tích lại thế cờ */}
-                <div className="space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[10px] uppercase tracking-widest text-zinc-600">
-                      Phân tích thế cờ trước nước này
-                    </span>
-                    <button
-                      onClick={runDetailAnalysis}
-                      disabled={detailLoading}
-                      className="px-2 py-0.5 rounded bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-[10px] text-zinc-300 flex items-center gap-1 disabled:opacity-50 transition cursor-pointer"
-                    >
-                      {detailLoading ? (
-                        <Loader2 className="w-2.5 h-2.5 animate-spin" />
-                      ) : (
-                        <Search className="w-2.5 h-2.5" />
-                      )}
-                      {detail ? 'Phân tích lại' : 'Phân tích'}
-                    </button>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        onClick={() => onSelectPly(Math.max(1, currentPly - 1))}
+                        disabled={currentPly <= 1}
+                        className="p-1 rounded bg-zinc-900 hover:bg-zinc-800 disabled:opacity-30 border border-zinc-800 text-zinc-300 cursor-pointer"
+                        title="Nước trước"
+                      >
+                        <ChevronLeft className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={() =>
+                          onSelectPly(Math.min(moves.length, currentPly + 1))
+                        }
+                        disabled={currentPly >= moves.length}
+                        className="p-1 rounded bg-zinc-900 hover:bg-zinc-800 disabled:opacity-30 border border-zinc-800 text-zinc-300 cursor-pointer"
+                        title="Nước sau"
+                      >
+                        <ChevronRight className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   </div>
-                  {detail?.lines.map((line, i) => (
-                    <div
-                      key={line.rank}
-                      className="bg-zinc-950/80 border border-zinc-800/70 rounded px-2 py-1 flex items-center gap-2"
-                    >
-                      <span
-                        className="w-1.5 h-1.5 rounded-full shrink-0"
-                        style={{
-                          backgroundColor: PV_RANK_COLORS[i] ?? '#10b981',
-                        }}
-                      />
-                      <span className="font-mono text-[10px] text-zinc-300 shrink-0 tabular-nums">
-                        {formatScore(line)}
-                      </span>
-                      <span className="text-[10px] font-mono text-zinc-400 truncate">
-                        <span className="font-semibold text-zinc-200 mr-1">
-                          {line.move_san}
+
+                  {/* Thanh win% trước/sau */}
+                  {beforeWin !== null && afterWin !== undefined && (
+                    <div className="space-y-1">
+                      <div className="flex justify-between text-[11px] font-mono text-zinc-400">
+                        <span>Trước: {beforeWin.toFixed(1)}%</span>
+                        <span>Sau: {afterWin.toFixed(1)}%</span>
+                      </div>
+                      <div className="relative w-full h-3.5 rounded-full bg-zinc-900 border border-zinc-800 overflow-hidden">
+                        <div
+                          className="absolute inset-y-0 bg-zinc-200"
+                          style={{ width: `${beforeWin}%` }}
+                        />
+                        <div
+                          className="absolute inset-y-0 w-[2px] bg-sky-400"
+                          style={{ left: `${afterWin}%` }}
+                          title={`Sau khi đi: ${afterWin.toFixed(1)}%`}
+                        />
+                      </div>
+                      <div className="flex justify-between text-[11px] font-mono">
+                        <span
+                          className={
+                            (selectedMove.winLoss ?? 0) > 1
+                              ? 'text-rose-300'
+                              : 'text-emerald-300'
+                          }
+                        >
+                          Mất {(selectedMove.winLoss ?? 0).toFixed(1)}% cơ hội thắng
                         </span>
-                        {line.pv_san.slice(1).join(' ')}
+                        <span className="text-zinc-400">
+                          Chuẩn {selectedMove.accuracy}%
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Nước tối ưu */}
+                  {selectedMove.bestMoveSan &&
+                    selectedMove.bestMoveUci !== selectedMove.uci && (
+                      <div className="bg-zinc-950 rounded-md border border-zinc-800/80 px-3 py-2 flex items-center justify-between">
+                        <span className="text-[11px] text-zinc-400">
+                          Nước tối ưu
+                        </span>
+                        <span className="text-[13px] font-mono font-bold text-emerald-400">
+                          {selectedMove.bestMoveSan}
+                        </span>
+                      </div>
+                    )}
+
+                  {/* Phân tích lại thế cờ */}
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] uppercase tracking-widest text-zinc-600">
+                        Phân tích thế cờ trước nước này
                       </span>
+                      <button
+                        onClick={runDetailAnalysis}
+                        disabled={detailLoading}
+                        className="px-2 py-0.5 rounded bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-[11px] text-zinc-300 flex items-center gap-1 disabled:opacity-50 transition cursor-pointer"
+                      >
+                        {detailLoading ? (
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                        ) : (
+                          <Search className="w-3 h-3" />
+                        )}
+                        {detail ? 'Phân tích lại' : 'Phân tích'}
+                      </button>
                     </div>
-                  ))}
-                  {detail && detail.lines.length === 0 && (
-                    <div className="text-[10px] text-zinc-600 text-center py-1">
-                      Thế cờ đã kết thúc ({detail.result}).
-                    </div>
-                  )}
-                  {detail && (
-                    <div className="text-[9px] text-zinc-600 text-right font-mono">
-                      depth ~{detail.lines[0]?.depth ?? '—'} · MultiPV{' '}
-                      {detail.lines.length}
-                    </div>
-                  )}
-                </div>
-              </>
-            )}
+                    {detail?.lines.map((line, i) => (
+                      <div
+                        key={line.rank}
+                        className="bg-zinc-950/80 border border-zinc-800/70 rounded px-2 py-1.5 flex items-center gap-2"
+                      >
+                        <span
+                          className="w-2 h-2 rounded-full shrink-0"
+                          style={{
+                            backgroundColor: PV_RANK_COLORS[i] ?? '#10b981',
+                          }}
+                        />
+                        <span className="font-mono text-[11px] text-zinc-300 shrink-0 tabular-nums">
+                          {formatScore(line)}
+                        </span>
+                        <span className="text-[11px] font-mono text-zinc-400 truncate">
+                          <span className="font-semibold text-zinc-200 mr-1">
+                            {line.move_san}
+                          </span>
+                          {line.pv_san.slice(1).join(' ')}
+                        </span>
+                      </div>
+                    ))}
+                    {detail && detail.lines.length === 0 && (
+                      <div className="text-[11px] text-zinc-600 text-center py-1">
+                        Thế cờ đã kết thúc ({detail.result}).
+                      </div>
+                    )}
+                    {detail && (
+                      <div className="text-[10px] text-zinc-600 text-right font-mono">
+                        depth ~{detail.lines[0]?.depth ?? '—'} · MultiPV{' '}
+                        {detail.lines.length}
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
           </div>
-        </div>
-      </div>
+        </>
+      )}
     </div>
   );
 };

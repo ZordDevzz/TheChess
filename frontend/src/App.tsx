@@ -116,7 +116,7 @@ export const App: React.FC = () => {
   const [showGameOver, setShowGameOver] = useState(
     SAVED_GAME?.phase === 'finished'
   );
-  const [reviewOpen, setReviewOpen] = useState(false);
+  const [reviewMode, setReviewMode] = useState(false);
   const [hintArrow, setHintArrow] = useState<Arrow | null>(null);
 
   // --- Người chơi / AI ---
@@ -806,7 +806,7 @@ export const App: React.FC = () => {
   };
 
   const handleOpenReview = async (runIfNeeded = false) => {
-    setReviewOpen(true);
+    setReviewMode(true);
     setShowGameOver(false);
     if (runIfNeeded && moves.length > 0 && !reviewResult && !isReviewing) {
       await handleRunGameReview();
@@ -1087,7 +1087,7 @@ export const App: React.FC = () => {
                   )}
 
                   {/* Nút mở lại tổng kết sau khi đóng modal */}
-                  {phase === 'finished' && !showGameOver && !reviewOpen && (
+                  {phase === 'finished' && !showGameOver && !reviewMode && (
                     <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10">
                       <button
                         onClick={() => setShowGameOver(true)}
@@ -1127,7 +1127,7 @@ export const App: React.FC = () => {
         </div>
 
         {/* Cột công cụ bên phải */}
-        <aside className="w-full md:w-[390px] xl:w-[430px] shrink-0 h-full border-l border-zinc-800/80 bg-[#111114] flex flex-col overflow-hidden">
+        <aside className="w-full md:w-[460px] xl:w-[540px] shrink-0 h-full border-l border-zinc-800/80 bg-[#111114] flex flex-col overflow-hidden">
           {activeTab === 'editor' ? (
             <BoardEditor
               boardMap={editorBoardMap}
@@ -1137,6 +1137,28 @@ export const App: React.FC = () => {
               presets={status?.presets || []}
               onApplyPosition={handleApplyCustomPosition}
             />
+          ) : reviewMode ? (
+            <>
+              <ReviewScreen
+                onClose={() => setReviewMode(false)}
+                moves={moves}
+                currentPly={currentPly}
+                onSelectPly={(ply) => setCurrentPly(ply)}
+                reviewResult={reviewResult}
+                isReviewing={isReviewing}
+                reviewProgress={reviewProgress}
+                onRunReview={handleRunGameReview}
+              />
+
+              <EvalGraph
+                moves={moves}
+                currentPly={currentPly}
+                onSelectPly={(ply) => setCurrentPly(ply)}
+                reviewResult={reviewResult}
+                isReviewing={isReviewing}
+                embedded
+              />
+            </>
           ) : (
             <>
               <EnginePanel
@@ -1244,19 +1266,6 @@ export const App: React.FC = () => {
         onAnalyze={() => handleOpenReview(true)}
         onExportPgn={handleExportPgn}
         onClose={() => setShowGameOver(false)}
-      />
-
-      {/* Màn hình phân tích chi tiết */}
-      <ReviewScreen
-        open={reviewOpen}
-        onClose={() => setReviewOpen(false)}
-        moves={moves}
-        currentPly={currentPly}
-        onSelectPly={(ply) => setCurrentPly(ply)}
-        reviewResult={reviewResult}
-        isReviewing={isReviewing}
-        reviewProgress={reviewProgress}
-        onRunReview={handleRunGameReview}
       />
 
       <Toasts toasts={toasts} onDismiss={dismissToast} />

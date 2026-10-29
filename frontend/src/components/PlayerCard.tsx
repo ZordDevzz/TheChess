@@ -23,7 +23,7 @@ export const PlayerCard: React.FC<PlayerCardProps> = ({
   materialDiff,
 }) => (
   <div
-    className={`w-full flex items-center gap-2 px-2.5 py-1 rounded-md border text-[11px] transition ${
+    className={`w-full flex items-center gap-2 px-2.5 py-1 rounded-md border text-xs transition ${
       isTurn
         ? 'bg-zinc-800/80 border-zinc-600'
         : 'bg-zinc-950/70 border-zinc-800/80'
@@ -46,13 +46,13 @@ export const PlayerCard: React.FC<PlayerCardProps> = ({
       {player.name}
     </span>
     {player.type === 'ai' && (
-      <span className="shrink-0 inline-flex items-center gap-0.5 text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400 font-medium">
+      <span className="shrink-0 inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400 font-medium">
         <Bot className="w-2.5 h-2.5" />
         AI
       </span>
     )}
     {isThinking && (
-      <span className="shrink-0 text-[9px] text-emerald-400 animate-pulse font-mono">
+      <span className="shrink-0 text-[10px] text-emerald-400 animate-pulse font-mono">
         đang nghĩ…
       </span>
     )}
