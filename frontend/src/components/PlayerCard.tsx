@@ -7,19 +7,16 @@ interface PlayerCardProps {
   side: 'w' | 'b';
   isTurn: boolean;
   isThinking?: boolean;
-  /** Ký hiệu quân đối phương đã bị bắt */
-  capturedSymbols: string[];
   /** Chênh lệch vật chất (>0 = bên này đang hơn) */
   materialDiff: number;
 }
 
-/** Thẻ người chơi hiển thị tên, loại (người/AI), quân bắt được và chênh lệch vật chất. */
+/** Thẻ người chơi hiển thị tên, loại (người/AI) và chênh lệch vật chất. */
 export const PlayerCard: React.FC<PlayerCardProps> = ({
   player,
   side,
   isTurn,
   isThinking,
-  capturedSymbols,
   materialDiff,
 }) => (
   <div
@@ -59,12 +56,7 @@ export const PlayerCard: React.FC<PlayerCardProps> = ({
 
     <span className="flex-1" />
 
-    {/* Quân đã bắt + chênh lệch vật chất */}
-    {capturedSymbols.length > 0 && (
-      <span className="text-zinc-500 tracking-tighter leading-none truncate">
-        {capturedSymbols.join('')}
-      </span>
-    )}
+    {/* Chênh lệch vật chất (danh sách quân đã bắt nằm ở 2 biên bàn cờ) */}
     {materialDiff > 0 && (
       <span className="shrink-0 font-mono font-semibold text-emerald-400">
         +{materialDiff}

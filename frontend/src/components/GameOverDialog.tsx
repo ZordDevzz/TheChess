@@ -85,8 +85,9 @@ export const GameOverDialog: React.FC<GameOverDialogProps> = ({
                   : 'border-zinc-800/80'
               }`}
             >
-              <div className="text-[11px] text-zinc-400 truncate">
-                {side === 'w' ? '⬜ Trắng' : '⬛ Đen'}
+              <div className="text-[11px] text-zinc-400 truncate flex items-center justify-center gap-1.5">
+                <span className="w-2.5 h-2.5 rounded-sm bg-zinc-100 border border-zinc-300 inline-block" />
+                {side === 'w' ? 'Trắng' : 'Đen'}
               </div>
               <div className="text-xs font-medium text-zinc-100 truncate mt-0.5">
                 {players[side].name}

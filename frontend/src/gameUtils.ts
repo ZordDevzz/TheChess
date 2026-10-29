@@ -138,8 +138,8 @@ export function detectGameOver(fen: string): GameOverInfo | null {
 
 const PIECE_VALUES: Record<string, number> = { p: 1, n: 3, b: 3, r: 5, q: 9 };
 const START_COUNTS: Record<string, number> = { p: 8, n: 2, b: 2, r: 2, q: 1 };
-const BLACK_SYMBOLS: Record<string, string> = { p: '♟', n: '♞', b: '♝', r: '♜', q: '♛' };
-const WHITE_SYMBOLS: Record<string, string> = { p: '♙', n: '♘', b: '♗', r: '♖', q: '♕' };
+// Dùng glyph filled cho cả 2 màu — phân biệt bằng màu chữ nơi hiển thị
+const CAPTURED_SYMBOLS: Record<string, string> = { p: '♟', n: '♞', b: '♝', r: '♜', q: '♛' };
 
 export interface MaterialInfo {
   /** Quân Đen đã bị bắt (hiển thị cạnh người chơi Trắng) */
@@ -178,7 +178,7 @@ export function getMaterialInfo(fen: string): MaterialInfo {
     const out: Array<{ sym: string; val: number }> = [];
     for (const t of ['q', 'r', 'b', 'n', 'p'] as const) {
       const miss = Math.max(0, START_COUNTS[t] - counts[color][t]);
-      const sym = color === 'b' ? BLACK_SYMBOLS[t] : WHITE_SYMBOLS[t];
+      const sym = CAPTURED_SYMBOLS[t];
       for (let i = 0; i < miss; i++) out.push({ sym, val: PIECE_VALUES[t] });
     }
     return out.sort((a, b) => b.val - a.val).map((x) => x.sym);

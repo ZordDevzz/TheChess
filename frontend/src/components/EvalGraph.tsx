@@ -56,8 +56,16 @@ export const EvalGraph: React.FC<EvalGraphProps> = ({
         <div className="flex items-center gap-2 text-xs text-zinc-400 min-w-0">
           <span className="font-medium text-zinc-300">Biểu đồ lợi thế</span>
           {reviewResult && (
-            <span className="font-mono text-emerald-400 font-semibold shrink-0">
-              W {reviewResult.white_accuracy}% · B {reviewResult.black_accuracy}%
+            <span className="flex items-center gap-2 font-mono text-emerald-400 font-semibold shrink-0">
+              <span className="flex items-center gap-1" title="Độ chính xác bên Trắng">
+                <span className="w-2.5 h-2.5 rounded-sm bg-zinc-100 border border-zinc-300 inline-block" />
+                {reviewResult.white_accuracy}%
+              </span>
+              <span className="text-zinc-600">·</span>
+              <span className="flex items-center gap-1" title="Độ chính xác bên Đen">
+                <span className="w-2.5 h-2.5 rounded-sm bg-zinc-800 border border-zinc-600 inline-block" />
+                {reviewResult.black_accuracy}%
+              </span>
             </span>
           )}
         </div>

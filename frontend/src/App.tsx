@@ -21,13 +21,13 @@ import {
   PlayerInfo,
   PresetPosition,
 } from './types';
-import { EvalBar } from './components/EvalBar';
 import { EnginePanel } from './components/EnginePanel';
 import { MoveHistory } from './components/MoveHistory';
 import { EvalGraph } from './components/EvalGraph';
 import { Toasts, useToasts } from './components/Toasts';
 import { PromotionDialog } from './components/PromotionDialog';
 import { PlayerCard } from './components/PlayerCard';
+import { CapturedRail } from './components/CapturedRail';
 import { PreMatchDialog } from './components/PreMatchDialog';
 import { GameOverDialog } from './components/GameOverDialog';
 import { ReviewScreen } from './components/ReviewScreen';
@@ -207,7 +207,8 @@ export const App: React.FC = () => {
     if (!el) return;
     const updateSize = () => {
       const rect = el.getBoundingClientRect();
-      const availW = rect.width - 56;
+      // Để dư 2 bên cho CapturedRail đặt trong khoảng trống flanks
+      const availW = rect.width - 110;
       const availH = rect.height - 32 - 68; // trừ 2 PlayerCard + gap
       const optimal = Math.max(280, Math.floor(Math.min(availW, availH)));
       setBoardSize(optimal);
@@ -883,10 +884,6 @@ export const App: React.FC = () => {
 
   // ------------------ Render ------------------
 
-  const evalCp = analysis?.cp ?? 0;
-  const evalMate = analysis?.mate ?? null;
-  const evalWinWhite = analysis?.win_percent_white ?? 50;
-
   const displayedPosition =
     activeTab === 'editor'
       ? `${boardMapToFenPlacement(editorBoardMap)} w KQkq - 0 1`
@@ -902,8 +899,6 @@ export const App: React.FC = () => {
     side,
     isTurn: phase === 'playing' && chessInstance.turn() === side,
     isThinking: isAiThinking && aiPlayer === players[side],
-    capturedSymbols:
-      side === 'w' ? material.capturedByWhite : material.capturedByBlack,
     materialDiff: side === 'w' ? material.diff : -material.diff,
   });
 
@@ -1024,26 +1019,23 @@ export const App: React.FC = () => {
         {/* Vùng bàn cờ trung tâm */}
         <div
           ref={boardStageRef}
-          className="flex-1 min-w-0 min-h-0 h-full bg-[#0c0c0e] flex items-center justify-center p-4 overflow-hidden"
+          className="relative flex-1 min-w-0 min-h-0 h-full bg-[#0c0c0e] flex items-center justify-center p-4 overflow-hidden"
         >
           {activeTab === 'play' && (
-            <div className="flex flex-col items-center gap-1.5">
-              <div style={{ width: boardSize }}>
-                <PlayerCard {...playerCardProps(topSide)} />
-              </div>
+            <>
+              {/* Quân Trắng đã bắt — đặt vào khoảng trống bên trái bàn cờ */}
+              <CapturedRail
+                className="absolute left-5 top-1/2 -translate-y-1/2 z-0"
+                side="w"
+                symbols={material.capturedByWhite}
+                diff={material.diff}
+                height={boardSize}
+              />
 
-              <div className="flex gap-3 items-stretch">
-                {visibility.evalBar && (
-                  <div style={{ height: boardSize }} className="shrink-0">
-                    <EvalBar
-                      cp={evalCp}
-                      mate={evalMate}
-                      winPercentWhite={evalWinWhite}
-                      orientation={boardOrientation}
-                      enabled={showEval}
-                    />
-                  </div>
-                )}
+              <div className="flex flex-col items-center gap-1.5">
+                <div style={{ width: boardSize }}>
+                  <PlayerCard {...playerCardProps(topSide)} />
+                </div>
 
                 <div
                   style={{ width: boardSize, height: boardSize }}
@@ -1087,7 +1079,7 @@ export const App: React.FC = () => {
                   )}
 
                   {/* Nút mở lại tổng kết sau khi đóng modal */}
-                  {phase === 'finished' && !showGameOver && !reviewMode && (
+                    {phase === 'finished' && !showGameOver && !reviewMode && (
                     <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10">
                       <button
                         onClick={() => setShowGameOver(true)}
@@ -1098,12 +1090,21 @@ export const App: React.FC = () => {
                     </div>
                   )}
                 </div>
+
+                <div style={{ width: boardSize }}>
+                  <PlayerCard {...playerCardProps(bottomSide)} />
+                </div>
               </div>
 
-              <div style={{ width: boardSize }}>
-                <PlayerCard {...playerCardProps(bottomSide)} />
-              </div>
-            </div>
+              {/* Quân Đen đã bắt — đặt vào khoảng trống bên phải bàn cờ */}
+              <CapturedRail
+                className="absolute right-5 top-1/2 -translate-y-1/2 z-0"
+                side="b"
+                symbols={material.capturedByBlack}
+                diff={-material.diff}
+                height={boardSize}
+              />
+            </>
           )}
 
           {activeTab === 'editor' && (
