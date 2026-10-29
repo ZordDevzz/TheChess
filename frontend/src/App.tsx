@@ -27,7 +27,7 @@ import { EvalGraph } from './components/EvalGraph';
 import { Toasts, useToasts } from './components/Toasts';
 import { PromotionDialog } from './components/PromotionDialog';
 import { PlayerCard } from './components/PlayerCard';
-import { CapturedStrip } from './components/CapturedRail';
+import { CapturedBar } from './components/CapturedRail';
 import { PreMatchDialog } from './components/PreMatchDialog';
 import { GameOverDialog } from './components/GameOverDialog';
 import { ReviewScreen } from './components/ReviewScreen';
@@ -207,9 +207,9 @@ export const App: React.FC = () => {
     if (!el) return;
     const updateSize = () => {
       const rect = el.getBoundingClientRect();
-      const availW = rect.width - 24;
-      // Trừ 2 PlayerCard + 2 dải quân bắt (có thể wrap 1 hàng) + gap
-      const availH = rect.height - 64 - 56;
+      const availH = rect.height - 64; // trừ 2 PlayerCard + gap
+      // Bar 2 bên rộng 28% board mỗi bar -> giải B * (1 + 0.56) <= W - gap/padding
+      const availW = (rect.width - 60) / 1.56;
       const optimal = Math.max(280, Math.floor(Math.min(availW, availH)));
       setBoardSize(optimal);
     };
@@ -901,12 +901,12 @@ export const App: React.FC = () => {
     isThinking: isAiThinking && aiPlayer === players[side],
   });
 
-  const stripProps = (side: 'w' | 'b', align: 'left' | 'right') => ({
+  const capturedBarProps = (side: 'w' | 'b', dock: 'bottom' | 'top') => ({
     side,
     symbols: side === 'w' ? material.capturedByWhite : material.capturedByBlack,
     diff: side === 'w' ? material.diff : -material.diff,
     boardSize,
-    align,
+    dock,
   });
 
   return (
@@ -1029,12 +1029,15 @@ export const App: React.FC = () => {
           className="relative flex-1 min-w-0 min-h-0 h-full bg-[#0c0c0e] flex items-center justify-center p-4 overflow-hidden"
         >
           {activeTab === 'play' && (
-            <div className="flex flex-col items-center gap-1.5">
-              {/* Trên: thẻ người chơi + quân topSide đã bắt (căn phải) */}
-              <div style={{ width: boardSize }} className="space-y-1">
-                <PlayerCard {...playerCardProps(topSide)} />
-                <CapturedStrip {...stripProps(topSide, 'right')} />
-              </div>
+            /* 3 cột: bar quân bắt trái (đáy) · cột giữa (tên + bàn + tên) · bar phải (đỉnh) */
+            <div className="flex items-center gap-3">
+              <CapturedBar {...capturedBarProps(bottomSide, 'bottom')} />
+
+              <div className="flex flex-col items-center gap-1.5">
+                {/* Trên: thẻ người chơi của bên ở trên bàn */}
+                <div style={{ width: boardSize }}>
+                  <PlayerCard {...playerCardProps(topSide)} />
+                </div>
 
               <div
                 style={{ width: boardSize, height: boardSize }}
@@ -1090,11 +1093,13 @@ export const App: React.FC = () => {
                   )}
                 </div>
 
-                {/* Dưới: quân bottomSide đã bắt (căn trái) + thẻ người chơi */}
-                <div style={{ width: boardSize }} className="space-y-1">
-                  <CapturedStrip {...stripProps(bottomSide, 'left')} />
+                {/* Dưới: thẻ người chơi của bên ở dưới bàn */}
+                <div style={{ width: boardSize }}>
                   <PlayerCard {...playerCardProps(bottomSide)} />
                 </div>
+              </div>
+
+              <CapturedBar {...capturedBarProps(topSide, 'top')} />
             </div>
           )}
 
