@@ -1,6 +1,5 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { GameReviewResult, MoveRecord } from '../types';
-import { X } from 'lucide-react';
 
 interface EvalGraphProps {
   moves: MoveRecord[];
@@ -9,22 +8,11 @@ interface EvalGraphProps {
   reviewResult: GameReviewResult | null;
   isReviewing: boolean;
   onRunReview: () => void;
+  onOpenReview: () => void;
+  canReview: boolean;
 }
 
-const CLASS_ORDER: Array<{
-  key: 'Best' | 'Excellent' | 'Good' | 'Inaccuracy' | 'Mistake' | 'Blunder';
-  label: string;
-  symbol: string;
-  color: string;
-}> = [
-  { key: 'Best', label: 'Tốt nhất (Best)', symbol: '★', color: '#34d399' },
-  { key: 'Excellent', label: 'Xuất sắc (Excellent)', symbol: '!', color: '#2dd4bf' },
-  { key: 'Good', label: 'Hợp lý (Good)', symbol: '✓', color: '#60a5fa' },
-  { key: 'Inaccuracy', label: 'Chưa chuẩn (Inaccuracy)', symbol: '?!', color: '#facc15' },
-  { key: 'Mistake', label: 'Sai lầm (Mistake)', symbol: '?', color: '#fb923c' },
-  { key: 'Blunder', label: 'Ngớ ngẩn (Blunder)', symbol: '??', color: '#f87171' },
-];
-
+/** Biểu đồ lợi thế + nút chạy/mở màn hình Game Review chi tiết. */
 export const EvalGraph: React.FC<EvalGraphProps> = ({
   moves,
   currentPly,
@@ -32,8 +20,9 @@ export const EvalGraph: React.FC<EvalGraphProps> = ({
   reviewResult,
   isReviewing,
   onRunReview,
+  onOpenReview,
+  canReview,
 }) => {
-  const [showReviewModal, setShowReviewModal] = useState(false);
   const width = 460;
   const height = 76;
 
@@ -61,30 +50,32 @@ export const EvalGraph: React.FC<EvalGraphProps> = ({
   return (
     <div className="shrink-0 bg-[#111114] p-3.5 space-y-2">
       <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2 text-[11px] text-zinc-400">
+        <div className="flex items-center gap-2 text-[11px] text-zinc-400 min-w-0">
           <span className="font-medium text-zinc-300">Biểu đồ lợi thế</span>
           {reviewResult && (
-            <span className="font-mono text-emerald-400 font-semibold">
+            <span className="font-mono text-emerald-400 font-semibold shrink-0">
               W {reviewResult.white_accuracy}% · B {reviewResult.black_accuracy}%
             </span>
           )}
         </div>
 
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1.5 shrink-0">
           {reviewResult && (
             <button
-              onClick={() => setShowReviewModal(true)}
+              onClick={onOpenReview}
               className="px-2 py-0.5 rounded bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-[11px] text-zinc-300 cursor-pointer"
             >
               Chi tiết
             </button>
           )}
           <button
-            onClick={async () => {
-              await onRunReview();
-              setShowReviewModal(true);
-            }}
-            disabled={isReviewing || moves.length === 0}
+            onClick={onRunReview}
+            disabled={isReviewing || moves.length === 0 || !canReview}
+            title={
+              canReview
+                ? 'Chấm điểm toàn ván bằng engine'
+                : 'Bị tắt khi đang thi đấu (chế độ chơi với máy)'
+            }
             className="px-2.5 py-0.5 rounded bg-zinc-200 hover:bg-white disabled:bg-zinc-900 disabled:text-zinc-600 text-[11px] font-medium text-zinc-950 transition cursor-pointer"
           >
             {isReviewing ? 'Đang chấm...' : 'Game Review'}
@@ -92,7 +83,7 @@ export const EvalGraph: React.FC<EvalGraphProps> = ({
         </div>
       </div>
 
-      {/* Biểu đồ có chấm màu định hướng các bước ngoặt sai lầm (Inaccuracy / Mistake / Blunder) */}
+      {/* Biểu đồ có chấm màu định hướng các bước ngoặt */}
       <div className="relative w-full h-16 bg-[#0b0b0d] rounded border border-zinc-800/70 overflow-hidden">
         <svg
           viewBox={`0 0 ${width} ${height}`}
@@ -147,88 +138,6 @@ export const EvalGraph: React.FC<EvalGraphProps> = ({
           })}
         </svg>
       </div>
-
-      {/* Modal Tổng kết Game Review có màu phân cấp tiêu chí rõ ràng */}
-      {showReviewModal && reviewResult && (
-        <div
-          className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4"
-          onClick={() => setShowReviewModal(false)}
-        >
-          <div
-            className="bg-[#121215] border border-zinc-800 rounded-xl w-full max-w-md p-5 space-y-4 shadow-2xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
-              <h3 className="text-sm font-semibold text-zinc-100">
-                Tổng kết chất lượng ván đấu
-              </h3>
-              <button
-                onClick={() => setShowReviewModal(false)}
-                className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-100 cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="grid grid-cols-3 items-center text-center py-3 bg-zinc-950 rounded-lg border border-zinc-800/80">
-              <div>
-                <div className="text-[11px] text-zinc-400">⬜ Trắng</div>
-                <div className="text-xl font-mono font-bold text-emerald-400 mt-0.5">
-                  {reviewResult.white_accuracy}%
-                </div>
-              </div>
-              <div className="text-[10px] uppercase tracking-widest text-zinc-500">
-                Độ chính xác
-              </div>
-              <div>
-                <div className="text-[11px] text-zinc-400">⬛ Đen</div>
-                <div className="text-xl font-mono font-bold text-emerald-400 mt-0.5">
-                  {reviewResult.black_accuracy}%
-                </div>
-              </div>
-            </div>
-
-            <div className="divide-y divide-zinc-800/60 text-xs bg-zinc-950/50 px-3 py-1 rounded-lg border border-zinc-800/70">
-              {CLASS_ORDER.map((item) => {
-                const wCount = reviewResult.counts.w[item.key] ?? 0;
-                const bCount = reviewResult.counts.b[item.key] ?? 0;
-                return (
-                  <div key={item.key} className="grid grid-cols-3 items-center py-2">
-                    <span
-                      className="text-center font-mono font-semibold"
-                      style={{ color: wCount > 0 ? item.color : '#52525b' }}
-                    >
-                      {wCount}
-                    </span>
-                    <div className="flex items-center justify-center gap-2 text-zinc-300 text-[11px]">
-                      <span
-                        className="inline-flex items-center justify-center w-4 h-4 rounded-full font-mono text-[10px] font-bold text-zinc-950 shrink-0"
-                        style={{ backgroundColor: item.color }}
-                      >
-                        {item.symbol}
-                      </span>
-                      <span>{item.label}</span>
-                    </div>
-                    <span
-                      className="text-center font-mono font-semibold"
-                      style={{ color: bCount > 0 ? item.color : '#52525b' }}
-                    >
-                      {bCount}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-
-            <button
-              onClick={() => setShowReviewModal(false)}
-              className="w-full py-2 rounded-lg bg-zinc-200 hover:bg-white text-xs font-medium text-zinc-950 transition cursor-pointer"
-            >
-              Đóng
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

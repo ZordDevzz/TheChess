@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Chess, Square as ChessSquare } from 'chess.js';
 import { Chessboard } from 'react-chessboard';
 import type { Arrow, Square } from 'react-chessboard/dist/chessboard/types';
@@ -13,22 +13,36 @@ import {
 import {
   AnalysisResponse,
   EngineStatus,
+  GameConfig,
+  GameOverInfo,
+  GamePhase,
   GameReviewResult,
   MoveRecord,
+  PlayerInfo,
   PresetPosition,
 } from './types';
 import { EvalBar } from './components/EvalBar';
-import { EnginePanel, PlayMode } from './components/EnginePanel';
+import { EnginePanel } from './components/EnginePanel';
 import { MoveHistory } from './components/MoveHistory';
 import { EvalGraph } from './components/EvalGraph';
 import { Toasts, useToasts } from './components/Toasts';
 import { PromotionDialog } from './components/PromotionDialog';
+import { PlayerCard } from './components/PlayerCard';
+import { PreMatchDialog } from './components/PreMatchDialog';
+import { GameOverDialog } from './components/GameOverDialog';
+import { ReviewScreen } from './components/ReviewScreen';
 import {
   STARTING_FEN,
+  ANALYSIS_LEVEL_LABELS,
+  MODE_PRESETS,
   buildPgn,
   clearSavedGame,
+  detectGameOver,
   downloadPgn,
+  getMaterialInfo,
   loadSavedGame,
+  makeDefaultPlayers,
+  resolveFeatureVisibility,
   saveGame,
 } from './gameUtils';
 import {
@@ -50,6 +64,8 @@ const ARROW_COLORS = [
   'rgba(236, 72, 153, 0.55)',
 ];
 
+const HINT_ARROW_COLOR = 'rgba(250, 204, 21, 0.92)';
+
 const BOARD_THEMES: Record<
   'stone' | 'wood' | 'graphite',
   { name: string; light: string; dark: string }
@@ -67,6 +83,7 @@ export const App: React.FC = () => {
     SAVED_GAME?.boardTheme ?? 'stone'
   );
 
+  // --- Biên bản ván cờ ---
   const [initialFen, setInitialFen] = useState<string>(
     SAVED_GAME?.initialFen ?? STARTING_FEN
   );
@@ -82,27 +99,51 @@ export const App: React.FC = () => {
     null
   );
 
-  const [playMode, setPlayMode] = useState<PlayMode>('vs_ai');
+  // --- Vòng đời ván đấu ---
+  const [phase, setPhase] = useState<GamePhase>(SAVED_GAME?.phase ?? 'setup');
+  const [config, setConfig] = useState<GameConfig>(
+    SAVED_GAME?.config ?? MODE_PRESETS[1].defaultConfig
+  );
+  const [players, setPlayers] = useState<{ w: PlayerInfo; b: PlayerInfo }>(
+    SAVED_GAME?.players ?? makeDefaultPlayers()
+  );
+  const [gameOver, setGameOver] = useState<GameOverInfo | null>(
+    SAVED_GAME?.gameOver ?? null
+  );
+  const [showPreMatch, setShowPreMatch] = useState(
+    (SAVED_GAME?.phase ?? 'setup') === 'setup'
+  );
+  const [showGameOver, setShowGameOver] = useState(
+    SAVED_GAME?.phase === 'finished'
+  );
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [hintArrow, setHintArrow] = useState<Arrow | null>(null);
+
+  // --- Người chơi / AI ---
   const [playerColor, setPlayerColor] = useState<'w' | 'b'>(
     SAVED_GAME?.playerColor ?? 'w'
   );
-  const [aiEngine, setAiEngine] = useState<'maia' | 'stockfish'>('maia');
-  const [aiElo, setAiElo] = useState<number>(1500);
-  const [isAiThinking, setIsAiThinking] = useState<boolean>(false);
-  const [lastEngineUsed, setLastEngineUsed] = useState<string>('Maia 1500');
+  const [isAiThinking, setIsAiThinking] = useState(false);
 
-  const [showEval, setShowEval] = useState<boolean>(true);
-  const [showArrows, setShowArrows] = useState<boolean>(true);
+  // --- Phân tích ---
+  const [showEval, setShowEval] = useState(true);
+  const [showArrows, setShowArrows] = useState(true);
   const [multipv, setMultipv] = useState<number>(3);
   const [depth, setDepth] = useState<number>(15);
   const [analysis, setAnalysis] = useState<AnalysisResponse | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
 
+  // --- Game Review ---
   const [reviewResult, setReviewResult] = useState<GameReviewResult | null>(null);
   const [isReviewing, setIsReviewing] = useState<boolean>(false);
+  const [reviewProgress, setReviewProgress] = useState<{
+    done: number;
+    total: number;
+  } | null>(null);
 
-  const [editorBoardMap, setEditorBoardMap] = useState<Record<string, string>>(() =>
-    fenToBoardMap(STARTING_FEN)
+  // --- Board Editor ---
+  const [editorBoardMap, setEditorBoardMap] = useState<Record<string, string>>(
+    () => fenToBoardMap(STARTING_FEN)
   );
   const [editorTool, setEditorTool] = useState<EditorTool>('wQ');
 
@@ -111,7 +152,42 @@ export const App: React.FC = () => {
 
   const { toasts, pushToast, dismissToast } = useToasts();
 
-  // Tự động lưu ván cờ + thiết lập cơ bản vào localStorage
+  // ------------------ Derived ------------------
+
+  const currentFen =
+    currentPly === 0 ? initialFen : moves[currentPly - 1]?.fenAfter || initialFen;
+
+  const chessInstance = React.useMemo(() => {
+    try {
+      return new Chess(currentFen);
+    } catch {
+      return new Chess();
+    }
+  }, [currentFen]);
+
+  const visibility = useMemo(
+    () => resolveFeatureVisibility(config, phase),
+    [config, phase]
+  );
+
+  const modeLabel =
+    MODE_PRESETS.find((m) => m.id === config.mode)?.label ?? config.mode;
+
+  const aiSide: 'w' | 'b' = playerColor === 'w' ? 'b' : 'w';
+  const aiPlayer =
+    config.opponent === 'ai' && players[aiSide]?.type === 'ai'
+      ? players[aiSide]
+      : null;
+
+  const material = useMemo(() => getMaterialInfo(currentFen), [currentFen]);
+
+  const analysisEnabled =
+    activeTab === 'play' &&
+    (phase === 'finished' || (phase === 'playing' && config.analysis !== 'off'));
+
+  // ------------------ Effects ------------------
+
+  // Tự động lưu ván cờ + trạng thái vào localStorage
   useEffect(() => {
     saveGame({
       initialFen,
@@ -119,8 +195,12 @@ export const App: React.FC = () => {
       currentPly,
       playerColor,
       boardTheme,
+      phase,
+      config,
+      players,
+      gameOver,
     });
-  }, [initialFen, moves, currentPly, playerColor, boardTheme]);
+  }, [initialFen, moves, currentPly, playerColor, boardTheme, phase, config, players, gameOver]);
 
   useEffect(() => {
     const el = boardStageRef.current;
@@ -128,7 +208,7 @@ export const App: React.FC = () => {
     const updateSize = () => {
       const rect = el.getBoundingClientRect();
       const availW = rect.width - 56;
-      const availH = rect.height - 32;
+      const availH = rect.height - 32 - 68; // trừ 2 PlayerCard + gap
       const optimal = Math.max(280, Math.floor(Math.min(availW, availH)));
       setBoardSize(optimal);
     };
@@ -141,17 +221,6 @@ export const App: React.FC = () => {
       window.removeEventListener('resize', updateSize);
     };
   }, []);
-
-  const currentFen =
-    currentPly === 0 ? initialFen : moves[currentPly - 1]?.fenAfter || initialFen;
-
-  const chessInstance = React.useMemo(() => {
-    try {
-      return new Chess(currentFen);
-    } catch {
-      return new Chess();
-    }
-  }, [currentFen]);
 
   useEffect(() => {
     fetchStatus()
@@ -167,9 +236,14 @@ export const App: React.FC = () => {
       });
   }, []);
 
+  // Phân tích live — chỉ chạy khi được phép theo chế độ chơi + phase
   const abortControllerRef = useRef<AbortController | null>(null);
   useEffect(() => {
-    if (activeTab === 'editor') return;
+    if (!analysisEnabled) {
+      setAnalysis(null);
+      setIsAnalyzing(false);
+      return;
+    }
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
     }
@@ -189,10 +263,58 @@ export const App: React.FC = () => {
       });
 
     return () => controller.abort();
-  }, [currentFen, depth, multipv, activeTab]);
+  }, [currentFen, depth, multipv, activeTab, analysisEnabled]);
+
+  // Phát hiện kết thúc ván
+  useEffect(() => {
+    if (phase !== 'playing') return;
+    if (currentPly !== moves.length) return;
+    const info = detectGameOver(currentFen);
+    if (info) {
+      setGameOver(info);
+      setPhase('finished');
+      setShowGameOver(true);
+      setHintArrow(null);
+    }
+  }, [phase, currentFen, currentPly, moves.length]);
+
+  // Phím tắt điều hướng ván cờ: ← → Home End
+  useEffect(() => {
+    const onKeydown = (e: KeyboardEvent) => {
+      if (activeTab !== 'play') return;
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT' ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+      if (e.key === 'ArrowLeft') {
+        setCurrentPly((p) => Math.max(0, p - 1));
+      } else if (e.key === 'ArrowRight') {
+        setCurrentPly((p) => Math.min(moves.length, p + 1));
+      } else if (e.key === 'Home') {
+        setCurrentPly(0);
+      } else if (e.key === 'End') {
+        setCurrentPly(moves.length);
+      } else {
+        return;
+      }
+      e.preventDefault();
+    };
+    window.addEventListener('keydown', onKeydown);
+    return () => window.removeEventListener('keydown', onKeydown);
+  }, [activeTab, moves.length]);
+
+  // ------------------ Nước đi ------------------
 
   const executeMove = useCallback(
     (fromSq: string, toSq: string, promotion: string = 'q'): boolean => {
+      if (phase !== 'playing') return false;
+
       let baseMoves = moves;
       let baseFen = currentFen;
       if (currentPly < moves.length) {
@@ -234,41 +356,48 @@ export const App: React.FC = () => {
       setMoves(updatedMoves);
       setCurrentPly(newPly);
       setSelectedSquare(null);
+      setHintArrow(null);
 
-      classifySingleMove({
-        fen_before: baseFen,
-        move_uci: uci,
-        depth: 11,
-      })
-        .then((cls) => {
-          setMoves((prev) =>
-            prev.map((m) =>
-              m.ply === newPly && m.uci === uci
-                ? {
-                    ...m,
-                    cp: cls.after_analysis.cp,
-                    mate: cls.after_analysis.mate,
-                    winPercentWhite: cls.after_analysis.win_percent_white,
-                    classification: cls.classification,
-                    symbol: cls.symbol,
-                    color: cls.color,
-                    bestMoveUci: cls.best_move_uci,
-                    bestMoveSan: cls.best_move_san,
-                    accuracy: cls.accuracy,
-                    winLoss: cls.win_loss,
-                  }
-                : m
-            )
-          );
+      // Chỉ chấm điểm nước ngay khi mức phân tích cho phép
+      if (visibility.classifyLive) {
+        classifySingleMove({
+          fen_before: baseFen,
+          move_uci: uci,
+          depth: 11,
         })
-        .catch((err) => {
-          console.error('Lỗi chấm điểm nước đi:', err);
-          pushToast('Không chấm điểm được nước vừa đi (engine đang bận).', 'error');
-        });
+          .then((cls) => {
+            setMoves((prev) =>
+              prev.map((m) =>
+                m.ply === newPly && m.uci === uci
+                  ? {
+                      ...m,
+                      cp: cls.after_analysis.cp,
+                      mate: cls.after_analysis.mate,
+                      winPercentWhite: cls.after_analysis.win_percent_white,
+                      classification: cls.classification,
+                      symbol: cls.symbol,
+                      color: cls.color,
+                      bestMoveUci: cls.best_move_uci,
+                      bestMoveSan: cls.best_move_san,
+                      accuracy: cls.accuracy,
+                      winLoss: cls.win_loss,
+                    }
+                  : m
+              )
+            );
+          })
+          .catch((err) => {
+            console.error('Lỗi chấm điểm nước đi:', err);
+            pushToast(
+              'Không chấm điểm được nước vừa đi (engine đang bận).',
+              'error'
+            );
+          });
+      }
 
       return true;
     },
-    [moves, currentPly, currentFen, initialFen, pushToast]
+    [moves, currentPly, currentFen, initialFen, phase, visibility.classifyLive, pushToast]
   );
 
   /**
@@ -277,6 +406,7 @@ export const App: React.FC = () => {
    */
   const tryMove = useCallback(
     (fromSq: string, toSq: string): boolean => {
+      if (phase !== 'playing') return false;
       const piece = chessInstance.get(fromSq as ChessSquare);
       if (piece && piece.type === 'p') {
         const lastRank = piece.color === 'w' ? '8' : '1';
@@ -287,11 +417,14 @@ export const App: React.FC = () => {
       }
       return executeMove(fromSq, toSq, 'q');
     },
-    [chessInstance, executeMove]
+    [chessInstance, executeMove, phase]
   );
+
+  // ------------------ AI ------------------
 
   const triggerAiMove = useCallback(
     async (fenToPlay: string) => {
+      if (!aiPlayer?.ai) return;
       const checkGame = new Chess(fenToPlay);
       if (checkGame.isGameOver()) return;
 
@@ -299,29 +432,32 @@ export const App: React.FC = () => {
       try {
         const res = await requestAIMove({
           fen: fenToPlay,
-          engine_type: aiEngine,
-          elo: aiElo,
+          engine_type: aiPlayer.ai.engine,
+          elo: aiPlayer.ai.elo,
           move_time: 0.45,
         });
-        setLastEngineUsed(res.engine_used);
         const promo = res.move_uci.length > 4 ? res.move_uci[4] : 'q';
         executeMove(res.from_square, res.to_square, promo);
       } catch (err) {
         console.error('Lỗi AI move:', err);
         pushToast(
-          `AI không đi được nước này: ${err instanceof Error ? err.message : 'lỗi không xác định'}`,
+          `AI không đi được nước này: ${
+            err instanceof Error ? err.message : 'lỗi không xác định'
+          }`,
           'error'
         );
       } finally {
         setIsAiThinking(false);
       }
     },
-    [aiEngine, aiElo, executeMove, pushToast]
+    [aiPlayer, executeMove, pushToast]
   );
 
+  // AI tự đi khi tới lượt (chỉ khi ván đang chơi)
   useEffect(() => {
     if (activeTab !== 'play') return;
-    if (playMode !== 'vs_ai') return;
+    if (phase !== 'playing') return;
+    if (config.opponent !== 'ai') return;
     if (isAiThinking) return;
     if (currentPly !== moves.length) return;
 
@@ -333,16 +469,16 @@ export const App: React.FC = () => {
     }
     if (g.isGameOver()) return;
 
-    const currentTurn = g.turn();
-    if (currentTurn !== playerColor) {
+    if (g.turn() !== playerColor) {
       const timer = setTimeout(() => {
         triggerAiMove(currentFen);
-      }, 260);
+      }, 300);
       return () => clearTimeout(timer);
     }
   }, [
     activeTab,
-    playMode,
+    phase,
+    config.opponent,
     playerColor,
     currentFen,
     currentPly,
@@ -350,6 +486,8 @@ export const App: React.FC = () => {
     isAiThinking,
     triggerAiMove,
   ]);
+
+  // ------------------ Tương tác bàn cờ ------------------
 
   const handlePieceDrop = (
     sourceSquare: Square,
@@ -403,7 +541,11 @@ export const App: React.FC = () => {
     }
 
     const pieceOnSq = chessInstance.get(square as ChessSquare);
-    if (pieceOnSq && pieceOnSq.color === chessInstance.turn()) {
+    if (
+      phase === 'playing' &&
+      pieceOnSq &&
+      pieceOnSq.color === chessInstance.turn()
+    ) {
       setSelectedSquare(square);
     } else {
       setSelectedSquare(null);
@@ -411,15 +553,27 @@ export const App: React.FC = () => {
   };
 
   const customArrows: Arrow[] = React.useMemo(() => {
-    if (activeTab === 'editor' || !showArrows || !analysis || !analysis.lines) {
-      return [];
+    const out: Arrow[] = [];
+    if (
+      activeTab !== 'editor' &&
+      showArrows &&
+      visibility.arrows &&
+      analysis?.lines
+    ) {
+      out.push(
+        ...analysis.lines.map(
+          (line, idx) =>
+            [
+              line.from_square as Square,
+              line.to_square as Square,
+              ARROW_COLORS[idx] || ARROW_COLORS[0],
+            ] as Arrow
+        )
+      );
     }
-    return analysis.lines.map((line, idx) => [
-      line.from_square as Square,
-      line.to_square as Square,
-      ARROW_COLORS[idx] || ARROW_COLORS[0],
-    ]);
-  }, [activeTab, showArrows, analysis]);
+    if (hintArrow) out.push(hintArrow);
+    return out;
+  }, [activeTab, showArrows, visibility.arrows, analysis, hintArrow]);
 
   const customSquareStyles = React.useMemo(() => {
     const styles: Record<string, React.CSSProperties> = {};
@@ -475,41 +629,84 @@ export const App: React.FC = () => {
     return styles;
   }, [activeTab, currentPly, moves, selectedSquare, chessInstance]);
 
-  // Phím tắt điều hướng ván cờ: ← → Home End
-  useEffect(() => {
-    const onKeydown = (e: KeyboardEvent) => {
-      if (activeTab !== 'play') return;
-      const target = e.target as HTMLElement | null;
+  // ------------------ Hành động ván đấu ------------------
+
+  const handleStartGame = () => {
+    setGameOver(null);
+    setReviewResult(null);
+    setCurrentPly(moves.length);
+    setPhase('playing');
+    setShowPreMatch(false);
+    pushToast(
+      `Bắt đầu ván (${modeLabel} · Phân tích: ${
+        ANALYSIS_LEVEL_LABELS[config.analysis].label
+      })`,
+      'success'
+    );
+  };
+
+  const openPreMatch = () => {
+    if (phase === 'playing' && moves.length > 0) {
       if (
-        target &&
-        (target.tagName === 'INPUT' ||
-          target.tagName === 'TEXTAREA' ||
-          target.tagName === 'SELECT' ||
-          target.isContentEditable)
-      ) {
+        !window.confirm(
+          'Về màn hình chuẩn bị? Ván hiện tại sẽ dừng lại (các nước đã đi vẫn được giữ).'
+        )
+      )
         return;
-      }
-      if (e.key === 'ArrowLeft') {
-        setCurrentPly((p) => Math.max(0, p - 1));
-      } else if (e.key === 'ArrowRight') {
-        setCurrentPly((p) => Math.min(moves.length, p + 1));
-      } else if (e.key === 'Home') {
-        setCurrentPly(0);
-      } else if (e.key === 'End') {
-        setCurrentPly(moves.length);
-      } else {
-        return;
-      }
-      e.preventDefault();
-    };
-    window.addEventListener('keydown', onKeydown);
-    return () => window.removeEventListener('keydown', onKeydown);
-  }, [activeTab, moves.length]);
+    }
+    setPhase('setup');
+    setGameOver(null);
+    setShowPreMatch(true);
+  };
+
+  const handleNewGame = () => {
+    setInitialFen(STARTING_FEN);
+    setMoves([]);
+    setCurrentPly(0);
+    setReviewResult(null);
+    setGameOver(null);
+    setSelectedSquare(null);
+    setPendingPromo(null);
+    setPhase('setup');
+    setShowPreMatch(true);
+    clearSavedGame();
+  };
+
+  const handleRematch = () => {
+    setPlayers({ w: players.b, b: players.w });
+    const nextColor = playerColor === 'w' ? 'b' : 'w';
+    setPlayerColor(nextColor);
+    setBoardOrientation(nextColor === 'w' ? 'white' : 'black');
+    setMoves([]);
+    setCurrentPly(0);
+    setReviewResult(null);
+    setGameOver(null);
+    setSelectedSquare(null);
+    setPendingPromo(null);
+    setShowGameOver(false);
+    setPhase('playing');
+  };
+
+  const handleResign = () => {
+    if (phase !== 'playing') return;
+    const resigning: 'w' | 'b' =
+      config.opponent === 'ai' ? playerColor : chessInstance.turn();
+    const name = players[resigning].name;
+    if (!window.confirm(`${name} đầu hàng?`)) return;
+    const winner = resigning === 'w' ? 'b' : 'w';
+    setGameOver({
+      result: winner === 'w' ? '1-0' : '0-1',
+      reason: 'Đầu hàng',
+      winner,
+    });
+    setPhase('finished');
+    setShowGameOver(true);
+  };
 
   const handleTakeback = () => {
-    if (moves.length === 0) return;
+    if (!visibility.takeback || moves.length === 0) return;
     const stepsBack =
-      playMode === 'vs_ai' &&
+      config.opponent === 'ai' &&
       chessInstance.turn() === playerColor &&
       moves.length >= 2
         ? 2
@@ -519,57 +716,39 @@ export const App: React.FC = () => {
     setCurrentPly(targetLen);
   };
 
-  const handleApplyCustomPosition = (fen: string, pgn?: string) => {
-    if (pgn) {
-      try {
-        const g = new Chess();
-        g.loadPgn(pgn);
-        const historyVerbose = g.history({ verbose: true });
-        const startFen = g.getHeaders()['FEN'] || STARTING_FEN;
-        const temp = new Chess(startFen);
-        const builtMoves: MoveRecord[] = [];
-        historyVerbose.forEach((mv, idx) => {
-          const fenBefore = temp.fen();
-          temp.move(mv);
-          builtMoves.push({
-            ply: idx + 1,
-            moveNumber: Math.floor(idx / 2) + 1,
-            turn: mv.color,
-            uci: `${mv.from}${mv.to}${mv.promotion || ''}`,
-            san: mv.san,
-            from: mv.from,
-            to: mv.to,
-            fenBefore,
-            fenAfter: temp.fen(),
-          });
-        });
-        setInitialFen(startFen);
-        setMoves(builtMoves);
-        setCurrentPly(builtMoves.length);
-        setReviewResult(null);
-        setSelectedSquare(null);
-        setPendingPromo(null);
-        setActiveTab('play');
-        return;
-      } catch {
-        pushToast('PGN không hợp lệ, vui lòng kiểm tra lại cú pháp PGN.', 'error');
+  const canHint =
+    visibility.hints &&
+    phase === 'playing' &&
+    !isAiThinking &&
+    currentPly === moves.length &&
+    chessInstance.turn() === playerColor;
+
+  const handleHint = useCallback(async () => {
+    if (!canHint) return;
+    try {
+      const res = await analyzePosition(currentFen, 12, 1);
+      const line = res.lines[0];
+      if (!line) {
+        pushToast('Không có gợi ý cho thế cờ này.', 'info');
         return;
       }
+      setHintArrow([
+        line.from_square as Square,
+        line.to_square as Square,
+        HINT_ARROW_COLOR,
+      ]);
+      window.setTimeout(() => setHintArrow(null), 4000);
+    } catch {
+      pushToast('Không lấy được gợi ý từ engine.', 'error');
     }
+  }, [canHint, currentFen, pushToast]);
 
-    setInitialFen(fen);
-    setMoves([]);
-    setCurrentPly(0);
-    setReviewResult(null);
-    setSelectedSquare(null);
-    setPendingPromo(null);
-    setEditorBoardMap(fenToBoardMap(fen));
-    setActiveTab('play');
-  };
+  // ------------------ Review & PGN ------------------
 
   const handleRunGameReview = async () => {
     if (moves.length === 0) return;
     setIsReviewing(true);
+    setReviewProgress({ done: 0, total: moves.length });
     try {
       const start = await startGameReview({
         initial_fen: initialFen,
@@ -577,11 +756,11 @@ export const App: React.FC = () => {
         depth: 11,
       });
 
-      // Poll tiến độ job đến khi xong
       let result = null;
       for (;;) {
         await new Promise((r) => setTimeout(r, 500));
         const job = await getReviewJob(start.job_id);
+        setReviewProgress(job.progress);
         if (job.status === 'done' && job.result) {
           result = job.result;
           break;
@@ -615,11 +794,22 @@ export const App: React.FC = () => {
     } catch (err) {
       console.error('Lỗi Game Review:', err);
       pushToast(
-        `Game Review thất bại: ${err instanceof Error ? err.message : 'lỗi không xác định'}`,
+        `Game Review thất bại: ${
+          err instanceof Error ? err.message : 'lỗi không xác định'
+        }`,
         'error'
       );
     } finally {
       setIsReviewing(false);
+      setReviewProgress(null);
+    }
+  };
+
+  const handleOpenReview = async (runIfNeeded = false) => {
+    setReviewOpen(true);
+    setShowGameOver(false);
+    if (runIfNeeded && moves.length > 0 && !reviewResult && !isReviewing) {
+      await handleRunGameReview();
     }
   };
 
@@ -638,6 +828,61 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleApplyCustomPosition = (fen: string, pgn?: string) => {
+    const finish = () => {
+      setPhase('setup');
+      setGameOver(null);
+      setReviewResult(null);
+      setSelectedSquare(null);
+      setPendingPromo(null);
+      setShowPreMatch(true);
+      setActiveTab('play');
+    };
+
+    if (pgn) {
+      try {
+        const g = new Chess();
+        g.loadPgn(pgn);
+        const historyVerbose = g.history({ verbose: true });
+        const startFen = g.getHeaders()['FEN'] || STARTING_FEN;
+        const temp = new Chess(startFen);
+        const builtMoves: MoveRecord[] = [];
+        historyVerbose.forEach((mv, idx) => {
+          const fenBefore = temp.fen();
+          temp.move(mv);
+          builtMoves.push({
+            ply: idx + 1,
+            moveNumber: Math.floor(idx / 2) + 1,
+            turn: mv.color,
+            uci: `${mv.from}${mv.to}${mv.promotion || ''}`,
+            san: mv.san,
+            from: mv.from,
+            to: mv.to,
+            fenBefore,
+            fenAfter: temp.fen(),
+          });
+        });
+        setInitialFen(startFen);
+        setMoves(builtMoves);
+        setCurrentPly(builtMoves.length);
+        setEditorBoardMap(fenToBoardMap(startFen));
+        finish();
+        return;
+      } catch {
+        pushToast('PGN không hợp lệ, vui lòng kiểm tra lại cú pháp PGN.', 'error');
+        return;
+      }
+    }
+
+    setInitialFen(fen);
+    setMoves([]);
+    setCurrentPly(0);
+    setEditorBoardMap(fenToBoardMap(fen));
+    finish();
+  };
+
+  // ------------------ Render ------------------
+
   const evalCp = analysis?.cp ?? 0;
   const evalMate = analysis?.mate ?? null;
   const evalWinWhite = analysis?.win_percent_white ?? 50;
@@ -648,6 +893,19 @@ export const App: React.FC = () => {
       : currentFen;
 
   const themeColors = BOARD_THEMES[boardTheme];
+
+  const topSide = boardOrientation === 'white' ? 'b' : 'w';
+  const bottomSide = boardOrientation === 'white' ? 'w' : 'b';
+
+  const playerCardProps = (side: 'w' | 'b') => ({
+    player: players[side],
+    side,
+    isTurn: phase === 'playing' && chessInstance.turn() === side,
+    isThinking: isAiThinking && aiPlayer === players[side],
+    capturedSymbols:
+      side === 'w' ? material.capturedByWhite : material.capturedByBlack,
+    materialDiff: side === 'w' ? material.diff : -material.diff,
+  });
 
   return (
     <div className="h-screen w-screen overflow-hidden bg-[#0c0c0e] text-zinc-200 flex flex-col select-none">
@@ -671,6 +929,8 @@ export const App: React.FC = () => {
             <span className="text-xs text-zinc-400 truncate">
               {activeTab === 'editor'
                 ? 'Thiết lập thế cờ tùy chỉnh'
+                : phase === 'setup'
+                ? 'Chuẩn bị ván đấu'
                 : chessInstance.isCheckmate()
                 ? `Chiếu hết · ${chessInstance.turn() === 'w' ? 'Đen' : 'Trắng'} thắng`
                 : chessInstance.isDraw()
@@ -686,7 +946,10 @@ export const App: React.FC = () => {
         <div className="flex items-center gap-2 shrink-0">
           {status?.stockfish_ready && (
             <span className="hidden md:inline-block text-[11px] font-mono text-zinc-500 mr-1">
-              {playMode === 'vs_ai' ? lastEngineUsed : 'Stockfish 17'}
+              {modeLabel}
+              {phase === 'playing'
+                ? ` · ${ANALYSIS_LEVEL_LABELS[config.analysis].label}`
+                : ''}
             </span>
           )}
 
@@ -761,49 +1024,106 @@ export const App: React.FC = () => {
         {/* Vùng bàn cờ trung tâm */}
         <div
           ref={boardStageRef}
-          className="flex-1 min-w-0 min-h-0 h-full bg-[#0c0c0e] flex items-center justify-center gap-3 p-4 overflow-hidden"
+          className="flex-1 min-w-0 min-h-0 h-full bg-[#0c0c0e] flex items-center justify-center p-4 overflow-hidden"
         >
           {activeTab === 'play' && (
-            <div style={{ height: boardSize }} className="shrink-0">
-              <EvalBar
-                cp={evalCp}
-                mate={evalMate}
-                winPercentWhite={evalWinWhite}
-                orientation={boardOrientation}
-                enabled={showEval}
-              />
+            <div className="flex flex-col items-center gap-1.5">
+              <div style={{ width: boardSize }}>
+                <PlayerCard {...playerCardProps(topSide)} />
+              </div>
+
+              <div className="flex gap-3 items-stretch">
+                {visibility.evalBar && (
+                  <div style={{ height: boardSize }} className="shrink-0">
+                    <EvalBar
+                      cp={evalCp}
+                      mate={evalMate}
+                      winPercentWhite={evalWinWhite}
+                      orientation={boardOrientation}
+                      enabled={showEval}
+                    />
+                  </div>
+                )}
+
+                <div
+                  style={{ width: boardSize, height: boardSize }}
+                  className="relative rounded-sm overflow-hidden shadow-2xl border border-zinc-800/90 shrink-0"
+                >
+                  <Chessboard
+                    id="TheChessStudioBoard"
+                    boardWidth={boardSize}
+                    position={displayedPosition}
+                    boardOrientation={boardOrientation}
+                    onPieceDrop={handlePieceDrop}
+                    onSquareClick={handleSquareClick}
+                    customArrows={customArrows}
+                    customSquareStyles={customSquareStyles}
+                    customDarkSquareStyle={{ backgroundColor: themeColors.dark }}
+                    customLightSquareStyle={{ backgroundColor: themeColors.light }}
+                    animationDuration={160}
+                  />
+                  {pendingPromo && (
+                    <PromotionDialog
+                      color={chessInstance.turn()}
+                      onPick={(p) => {
+                        const pp = pendingPromo;
+                        setPendingPromo(null);
+                        if (pp) executeMove(pp.from, pp.to, p);
+                      }}
+                      onCancel={() => setPendingPromo(null)}
+                    />
+                  )}
+
+                  {/* Overlay khi ván chưa bắt đầu */}
+                  {phase === 'setup' && !showPreMatch && (
+                    <div className="absolute inset-0 z-10 bg-black/45 flex items-center justify-center">
+                      <button
+                        onClick={() => setShowPreMatch(true)}
+                        className="px-4 py-2.5 rounded-lg bg-zinc-100 hover:bg-white text-zinc-950 text-xs font-semibold shadow-2xl transition cursor-pointer"
+                      >
+                        ⚙ Chuẩn bị &amp; Bắt đầu ván đấu
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Nút mở lại tổng kết sau khi đóng modal */}
+                  {phase === 'finished' && !showGameOver && !reviewOpen && (
+                    <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10">
+                      <button
+                        onClick={() => setShowGameOver(true)}
+                        className="px-3 py-1.5 rounded-lg bg-zinc-100/95 hover:bg-white text-zinc-950 text-[11px] font-semibold shadow-2xl transition cursor-pointer"
+                      >
+                        🏆 Xem tổng kết ván đấu
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div style={{ width: boardSize }}>
+                <PlayerCard {...playerCardProps(bottomSide)} />
+              </div>
             </div>
           )}
 
-          <div
-            style={{ width: boardSize, height: boardSize }}
-            className="relative rounded-sm overflow-hidden shadow-2xl border border-zinc-800/90 shrink-0"
-          >
-            <Chessboard
-              id="TheChessStudioBoard"
-              boardWidth={boardSize}
-              position={displayedPosition}
-              boardOrientation={boardOrientation}
-              onPieceDrop={handlePieceDrop}
-              onSquareClick={handleSquareClick}
-              customArrows={customArrows}
-              customSquareStyles={customSquareStyles}
-              customDarkSquareStyle={{ backgroundColor: themeColors.dark }}
-              customLightSquareStyle={{ backgroundColor: themeColors.light }}
-              animationDuration={160}
-            />
-            {pendingPromo && (
-              <PromotionDialog
-                color={chessInstance.turn()}
-                onPick={(p) => {
-                  const pp = pendingPromo;
-                  setPendingPromo(null);
-                  if (pp) executeMove(pp.from, pp.to, p);
-                }}
-                onCancel={() => setPendingPromo(null)}
+          {activeTab === 'editor' && (
+            <div
+              style={{ width: boardSize, height: boardSize }}
+              className="relative rounded-sm overflow-hidden shadow-2xl border border-zinc-800/90 shrink-0"
+            >
+              <Chessboard
+                id="TheChessStudioBoard"
+                boardWidth={boardSize}
+                position={displayedPosition}
+                boardOrientation={boardOrientation}
+                onPieceDrop={handlePieceDrop}
+                onSquareClick={handleSquareClick}
+                customDarkSquareStyle={{ backgroundColor: themeColors.dark }}
+                customLightSquareStyle={{ backgroundColor: themeColors.light }}
+                animationDuration={160}
               />
-            )}
-          </div>
+            </div>
+          )}
         </div>
 
         {/* Cột công cụ bên phải */}
@@ -820,17 +1140,14 @@ export const App: React.FC = () => {
           ) : (
             <>
               <EnginePanel
-                playMode={playMode}
-                onChangePlayMode={setPlayMode}
-                playerColor={playerColor}
-                onChangePlayerColor={(c) => {
-                  setPlayerColor(c);
-                  setBoardOrientation(c === 'w' ? 'white' : 'black');
-                }}
-                aiEngine={aiEngine}
-                onChangeAiEngine={setAiEngine}
-                aiElo={aiElo}
-                onChangeAiElo={setAiElo}
+                phase={phase}
+                config={config}
+                visibility={visibility}
+                modeLabel={modeLabel}
+                onOpenConfig={openPreMatch}
+                onResign={handleResign}
+                onHint={handleHint}
+                canHint={canHint}
                 showEval={showEval}
                 onToggleEval={() => setShowEval((v) => !v)}
                 showArrows={showArrows}
@@ -845,7 +1162,6 @@ export const App: React.FC = () => {
                   const from = uci.slice(0, 2);
                   const to = uci.slice(2, 4);
                   if (uci.length > 4) {
-                    // Nước gợi ý có sẵn quân phong cấp trong UCI
                     executeMove(from, to, uci[4]);
                   } else {
                     tryMove(from, to);
@@ -858,6 +1174,8 @@ export const App: React.FC = () => {
               <MoveHistory
                 moves={moves}
                 currentPly={currentPly}
+                phase={phase}
+                canTakeback={visibility.takeback}
                 onSelectPly={(ply) => setCurrentPly(ply)}
                 onTakeback={handleTakeback}
                 onExportPgn={handleExportPgn}
@@ -872,29 +1190,74 @@ export const App: React.FC = () => {
                   setPlayerColor(nextColor);
                   setBoardOrientation(nextColor === 'w' ? 'white' : 'black');
                 }}
-                onNewGame={() => {
-                  setInitialFen(STARTING_FEN);
-                  setMoves([]);
-                  setCurrentPly(0);
-                  setReviewResult(null);
-                  setSelectedSquare(null);
-                  setPendingPromo(null);
-                  clearSavedGame();
-                }}
+                onNewGame={handleNewGame}
               />
 
-              <EvalGraph
-                moves={moves}
-                currentPly={currentPly}
-                onSelectPly={(ply) => setCurrentPly(ply)}
-                reviewResult={reviewResult}
-                isReviewing={isReviewing}
-                onRunReview={handleRunGameReview}
-              />
+              {(phase !== 'playing' || config.analysis === 'full') && (
+                <EvalGraph
+                  moves={moves}
+                  currentPly={currentPly}
+                  onSelectPly={(ply) => setCurrentPly(ply)}
+                  reviewResult={reviewResult}
+                  isReviewing={isReviewing}
+                  onRunReview={() => handleOpenReview(true)}
+                  onOpenReview={() => handleOpenReview(false)}
+                  canReview={visibility.reviewButton}
+                />
+              )}
             </>
           )}
         </aside>
       </div>
+
+      {/* Màn chuẩn bị ván đấu */}
+      {activeTab === 'play' && (
+        <PreMatchDialog
+          open={showPreMatch && phase === 'setup'}
+          config={config}
+          players={players}
+          playerColor={playerColor}
+          hasMoves={moves.length > 0}
+          onChangeConfig={setConfig}
+          onChangePlayers={setPlayers}
+          onChangePlayerColor={(c) => {
+            setPlayerColor(c);
+            setBoardOrientation(c === 'w' ? 'white' : 'black');
+          }}
+          onStart={handleStartGame}
+          onClose={() => setShowPreMatch(false)}
+        />
+      )}
+
+      {/* Modal kết thúc ván đấu */}
+      <GameOverDialog
+        open={showGameOver && !!gameOver}
+        gameOver={gameOver}
+        players={players}
+        accuracy={
+          reviewResult
+            ? { w: reviewResult.white_accuracy, b: reviewResult.black_accuracy }
+            : null
+        }
+        onNewGame={handleNewGame}
+        onRematch={handleRematch}
+        onAnalyze={() => handleOpenReview(true)}
+        onExportPgn={handleExportPgn}
+        onClose={() => setShowGameOver(false)}
+      />
+
+      {/* Màn hình phân tích chi tiết */}
+      <ReviewScreen
+        open={reviewOpen}
+        onClose={() => setReviewOpen(false)}
+        moves={moves}
+        currentPly={currentPly}
+        onSelectPly={(ply) => setCurrentPly(ply)}
+        reviewResult={reviewResult}
+        isReviewing={isReviewing}
+        reviewProgress={reviewProgress}
+        onRunReview={handleRunGameReview}
+      />
 
       <Toasts toasts={toasts} onDismiss={dismissToast} />
     </div>

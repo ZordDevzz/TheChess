@@ -1,5 +1,5 @@
 import React from 'react';
-import { MoveRecord } from '../types';
+import { GamePhase, MoveRecord } from '../types';
 import {
   ChevronFirst,
   ChevronLast,
@@ -18,6 +18,8 @@ import {
 interface MoveHistoryProps {
   moves: MoveRecord[];
   currentPly: number;
+  phase: GamePhase;
+  canTakeback: boolean;
   onSelectPly: (ply: number) => void;
   onTakeback: () => void;
   onExportPgn: () => void;
@@ -72,6 +74,8 @@ const CLASSIFICATION_META: Record<
 export const MoveHistory: React.FC<MoveHistoryProps> = ({
   moves,
   currentPly,
+  phase,
+  canTakeback,
   onSelectPly,
   onTakeback,
   onExportPgn,
@@ -159,10 +163,10 @@ export const MoveHistory: React.FC<MoveHistoryProps> = ({
           <button
             onClick={onNewGame}
             className="px-2 py-0.5 rounded bg-zinc-900 hover:bg-zinc-800 border border-zinc-800/90 text-[11px] text-zinc-300 flex items-center gap-1 transition cursor-pointer"
-            title="Ván mới"
+            title="Về màn chuẩn bị & bắt đầu ván mới"
           >
             <RotateCcw className="w-3 h-3 text-zinc-400" />
-            Mới
+            Ván mới
           </button>
         </div>
       </div>
@@ -315,7 +319,7 @@ export const MoveHistory: React.FC<MoveHistoryProps> = ({
         </div>
 
         <div className="flex items-center gap-1">
-          {currentPly < moves.length && (
+          {phase === 'playing' && currentPly < moves.length && (
             <button
               onClick={onBranchFromHere}
               className="px-2.5 py-1 rounded bg-zinc-200 hover:bg-white text-zinc-950 text-[11px] font-medium flex items-center gap-1 transition cursor-pointer"
@@ -327,7 +331,12 @@ export const MoveHistory: React.FC<MoveHistoryProps> = ({
           )}
           <button
             onClick={onTakeback}
-            disabled={moves.length === 0}
+            disabled={moves.length === 0 || !canTakeback}
+            title={
+              canTakeback
+                ? 'Đi lại nước vừa đi'
+                : 'Đi lại bị tắt ở chế độ chơi này'
+            }
             className="px-2.5 py-1 rounded bg-zinc-900 hover:bg-zinc-800 disabled:opacity-30 border border-zinc-800/80 text-zinc-300 text-[11px] flex items-center gap-1 transition cursor-pointer"
           >
             <Undo2 className="w-3 h-3" />

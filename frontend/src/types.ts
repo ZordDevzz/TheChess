@@ -75,6 +75,65 @@ export interface ReviewJobStatus {
   error?: string;
 }
 
+// ---------------------------------------------------------------------------
+// Vòng đời ván đấu & chế độ chơi (V2)
+// ---------------------------------------------------------------------------
+
+/** Trạng thái ván đấu: chuẩn bị -> đang chơi -> đã kết thúc */
+export type GamePhase = 'setup' | 'playing' | 'finished';
+
+/** Chế độ chơi */
+export type GameModeId = 'training' | 'vs_ai' | 'online';
+
+/** Mức engine hỗ trợ trong lúc chơi (người dùng đặt ở màn chuẩn bị) */
+export type AnalysisLevel = 'off' | 'eval_only' | 'full';
+
+export interface AiSettings {
+  engine: 'maia' | 'stockfish';
+  elo: number;
+}
+
+/** Thông tin người chơi một bên — nền cho account/online/stats sau này */
+export interface PlayerInfo {
+  name: string;
+  type: 'human' | 'ai';
+  ai?: AiSettings;
+}
+
+export interface GameConfig {
+  mode: GameModeId;
+  analysis: AnalysisLevel;
+  allowTakeback: boolean;
+  allowHints: boolean;
+  /** Đối thủ: AI hoặc 2 người */
+  opponent: 'ai' | 'human';
+}
+
+export interface GameOverInfo {
+  result: '1-0' | '0-1' | '1/2-1/2';
+  reason: string;
+  winner: 'w' | 'b' | null;
+}
+
+export interface ModePreset {
+  id: GameModeId;
+  label: string;
+  description: string;
+  defaultConfig: GameConfig;
+  enabled: boolean;
+}
+
+/** Các tính năng được phép hiển thị/dùng theo config + phase */
+export interface FeatureVisibility {
+  canMove: boolean;
+  evalBar: boolean;
+  arrows: boolean;
+  classifyLive: boolean;
+  hints: boolean;
+  takeback: boolean;
+  reviewButton: boolean;
+}
+
 export interface GameReviewResult {
   initial_fen: string;
   white_accuracy: number;
