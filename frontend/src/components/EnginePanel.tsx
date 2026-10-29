@@ -114,7 +114,7 @@ export const EnginePanel: React.FC<EnginePanelProps> = ({
             {modeLabel}
           </span>
           {phase === 'playing' && (
-            <span className="text-xs text-zinc-500 truncate">
+            <span className="text-xs text-zinc-400 truncate">
               Phân tích: {ANALYSIS_LEVEL_LABELS[config.analysis].label}
             </span>
           )}
@@ -174,7 +174,7 @@ export const EnginePanel: React.FC<EnginePanelProps> = ({
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2 text-xs text-zinc-400">
                 <span className="font-medium text-zinc-200">Phân tích nhánh</span>
-                <span className="font-mono text-zinc-500">
+                <span className="font-mono text-zinc-400">
                   d={depth} · {multipv} PV
                 </span>
                 {isAnalyzing && (
@@ -189,7 +189,7 @@ export const EnginePanel: React.FC<EnginePanelProps> = ({
                     className={`px-2 py-0.5 rounded text-xs border flex items-center gap-1 transition cursor-pointer ${
                       showEval
                         ? 'bg-zinc-800 border-zinc-700 text-zinc-200'
-                        : 'bg-transparent border-zinc-800/80 text-zinc-500 hover:text-zinc-400'
+                        : 'bg-transparent border-zinc-800/80 text-zinc-400 hover:text-zinc-400'
                     }`}
                   >
                     {showEval ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
@@ -202,7 +202,7 @@ export const EnginePanel: React.FC<EnginePanelProps> = ({
                     className={`px-2 py-0.5 rounded text-xs border transition cursor-pointer ${
                       showArrows
                         ? 'bg-zinc-800 border-zinc-700 text-zinc-200'
-                        : 'bg-transparent border-zinc-800/80 text-zinc-500 hover:text-zinc-400'
+                        : 'bg-transparent border-zinc-800/80 text-zinc-400 hover:text-zinc-400'
                     }`}
                   >
                     Mũi tên
@@ -214,7 +214,7 @@ export const EnginePanel: React.FC<EnginePanelProps> = ({
                     className={`p-1 rounded border transition cursor-pointer ${
                       openEngineSettings
                         ? 'bg-zinc-800 border-zinc-600 text-zinc-100'
-                        : 'bg-transparent border-zinc-800/80 text-zinc-500 hover:text-zinc-300'
+                        : 'bg-transparent border-zinc-800/80 text-zinc-400 hover:text-zinc-300'
                     }`}
                     title="Cài đặt thông số phân tích"
                   >
@@ -340,7 +340,7 @@ export const EnginePanel: React.FC<EnginePanelProps> = ({
                   );
                 })
               ) : (
-                <div className="text-xs text-zinc-600 text-center py-2">
+                <div className="text-xs text-zinc-400 text-center py-2">
                   {analysis?.is_game_over
                     ? `Kết thúc (${analysis.result})`
                     : 'Đang phân tích...'}
@@ -348,7 +348,7 @@ export const EnginePanel: React.FC<EnginePanelProps> = ({
               )}
             </div>
           ) : (
-            <div className="text-xs text-zinc-600 text-center py-1">
+            <div className="text-xs text-zinc-400 text-center py-1">
               Mũi tên & gợi ý tắt ở mức “{ANALYSIS_LEVEL_LABELS[config.analysis].label}”.
             </div>
           )}

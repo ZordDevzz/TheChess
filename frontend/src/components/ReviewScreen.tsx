@@ -56,7 +56,7 @@ function winLossClass(winLoss: number): string {
   if (winLoss >= 5) return 'text-rose-400';
   if (winLoss >= 2) return 'text-orange-300';
   if (winLoss >= 0.5) return 'text-amber-300';
-  return 'text-zinc-500';
+  return 'text-zinc-400';
 }
 
 /** Chip định hướng bên chơi: ô màu + nhãn Trắng/Đen */
@@ -79,7 +79,7 @@ const SideChip: React.FC<{ side: 'w' | 'b'; children?: React.ReactNode }> = ({
 /** Tiêu đề khối phân tách */
 const SectionTitle: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   <div className="flex items-center gap-2">
-    <span className="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">
+    <span className="text-[10px] font-semibold uppercase tracking-widest text-zinc-400">
       {children}
     </span>
     <span className="flex-1 h-px bg-zinc-800/80" />
@@ -228,7 +228,7 @@ export const ReviewScreen: React.FC<ReviewScreenProps> = ({
           ) : reviewResult ? (
             <span className="flex items-center gap-2.5 text-xs font-mono text-zinc-300 truncate">
               <SideChip side="w">{reviewResult.white_accuracy}%</SideChip>
-              <span className="text-zinc-600">·</span>
+              <span className="text-zinc-400">·</span>
               <SideChip side="b">{reviewResult.black_accuracy}%</SideChip>
             </span>
           ) : null}
@@ -237,7 +237,7 @@ export const ReviewScreen: React.FC<ReviewScreenProps> = ({
           <button
             onClick={onRunReview}
             disabled={isReviewing || moves.length === 0}
-            className="px-2.5 py-1 rounded bg-zinc-200 hover:bg-white disabled:bg-zinc-900 disabled:text-zinc-600 text-xs font-medium text-zinc-950 transition cursor-pointer"
+            className="px-2.5 py-1 rounded bg-zinc-200 hover:bg-white disabled:bg-zinc-900 disabled:text-zinc-400 text-xs font-medium text-zinc-950 transition cursor-pointer"
           >
             {isReviewing
               ? 'Đang chấm...'
@@ -257,7 +257,7 @@ export const ReviewScreen: React.FC<ReviewScreenProps> = ({
       </div>
 
       {moves.length === 0 ? (
-        <div className="flex-1 flex items-center justify-center text-xs text-zinc-600 px-6 text-center">
+        <div className="flex-1 flex items-center justify-center text-xs text-zinc-400 px-6 text-center">
           Chưa có nước đi nào để phân tích.
         </div>
       ) : (
@@ -320,7 +320,7 @@ export const ReviewScreen: React.FC<ReviewScreenProps> = ({
               </div>
             ) : (
               !isReviewing && (
-                <div className="text-xs text-zinc-500 leading-relaxed text-center py-1">
+                <div className="text-xs text-zinc-400 leading-relaxed text-center py-1">
                   Chưa có dữ liệu. Bấm{' '}
                   <strong className="text-zinc-300">Chấm điểm</strong> để engine
                   đánh giá từng nước.
@@ -334,7 +334,7 @@ export const ReviewScreen: React.FC<ReviewScreenProps> = ({
             {/* KHỐI 2: Bảng nước đi với sticky header */}
             <div className="min-h-0 flex flex-col border-r border-zinc-800/60">
               <div className="shrink-0 sticky top-0 z-10 bg-[#15151a] grid grid-cols-[2.2rem_1fr_1fr] items-center gap-1.5 px-2.5 py-1.5 border-b border-zinc-800/80">
-                <span className="text-[10px] font-mono text-zinc-600">#</span>
+                <span className="text-[10px] font-mono text-zinc-400">#</span>
                 <span className="text-[10px] uppercase tracking-wide text-zinc-400 flex items-center gap-1.5">
                   <span className="w-2.5 h-2.5 rounded-sm bg-zinc-100 border border-zinc-400 inline-block" />
                   Trắng
@@ -350,7 +350,7 @@ export const ReviewScreen: React.FC<ReviewScreenProps> = ({
                     key={pair.moveNumber}
                     className="grid grid-cols-[2.2rem_1fr_1fr] items-center gap-1.5 px-2.5 py-1 border-b border-zinc-900/60 hover:bg-zinc-900/30"
                   >
-                    <span className="text-zinc-600 font-mono text-[11px] tabular-nums">
+                    <span className="text-zinc-400 font-mono text-[11px] tabular-nums">
                       {pair.moveNumber}.
                     </span>
                     {renderMoveCell(pair.white)}
@@ -363,7 +363,7 @@ export const ReviewScreen: React.FC<ReviewScreenProps> = ({
             {/* KHỐI 3: Chi tiết nước đang chọn */}
             <div className="min-h-0 overflow-y-auto p-3 space-y-3">
               {!selectedMove ? (
-                <div className="h-full flex items-center justify-center text-xs text-zinc-600 text-center px-3">
+                <div className="h-full flex items-center justify-center text-xs text-zinc-400 text-center px-3">
                   Chọn một nước trong bảng (hoặc bấm ←/→) để xem chi tiết.
                 </div>
               ) : (
@@ -381,7 +381,7 @@ export const ReviewScreen: React.FC<ReviewScreenProps> = ({
                           </span>
                         ) : (
                           <span
-                            className="inline-flex items-center justify-center w-5 h-5 rounded-full text-zinc-500 shrink-0 border border-zinc-700"
+                            className="inline-flex items-center justify-center w-5 h-5 rounded-full text-zinc-400 shrink-0 border border-zinc-700"
                             title="Chưa chấm điểm"
                           >
                             ?
@@ -392,7 +392,7 @@ export const ReviewScreen: React.FC<ReviewScreenProps> = ({
                           {selectedMove.turn === 'w' ? '.' : '...'}{' '}
                           {selectedMove.san}
                         </span>
-                        <span className="text-[11px] text-zinc-500 shrink-0 flex items-center gap-1">
+                        <span className="text-[11px] text-zinc-400 shrink-0 flex items-center gap-1">
                           (<SideChip side={selectedMove.turn} />)
                         </span>
                       </div>
@@ -454,7 +454,7 @@ export const ReviewScreen: React.FC<ReviewScreenProps> = ({
                         </div>
                       </div>
                     ) : (
-                      <div className="text-xs text-zinc-500 leading-relaxed">
+                      <div className="text-xs text-zinc-400 leading-relaxed">
                         Nước này chưa được chấm điểm. Bấm{' '}
                         <strong className="text-zinc-300">Chấm điểm</strong> để
                         xem phân loại &amp; độ chính xác.
@@ -465,7 +465,7 @@ export const ReviewScreen: React.FC<ReviewScreenProps> = ({
                   {/* Khối: các nước thay thế + gain */}
                   <div className="bg-zinc-950/60 rounded-lg border border-zinc-800/80 p-3 space-y-2">
                     <div className="flex items-center justify-between gap-2">
-                      <span className="text-[10px] uppercase tracking-widest text-zinc-500 font-semibold">
+                      <span className="text-[10px] uppercase tracking-widest text-zinc-400 font-semibold">
                         Các nước thay thế
                       </span>
                       <button
@@ -484,13 +484,13 @@ export const ReviewScreen: React.FC<ReviewScreenProps> = ({
                     </div>
 
                     {detailLoading && !detail ? (
-                      <div className="text-[11px] text-zinc-500 font-mono text-center py-3 flex items-center justify-center gap-1.5">
+                      <div className="text-[11px] text-zinc-400 font-mono text-center py-3 flex items-center justify-center gap-1.5">
                         <Loader2 className="w-3 h-3 animate-spin" />
                         Đang phân tích thế cờ...
                       </div>
                     ) : detail && detail.lines.length > 0 ? (
                       <>
-                        <div className="grid grid-cols-[auto_1fr_auto_auto] gap-x-2 gap-y-1 items-center text-[10px] uppercase tracking-wide text-zinc-600 px-0.5 pb-1 border-b border-zinc-900">
+                        <div className="grid grid-cols-[auto_1fr_auto_auto] gap-x-2 gap-y-1 items-center text-[10px] uppercase tracking-wide text-zinc-400 px-0.5 pb-1 border-b border-zinc-900">
                           <span />
                           <span>Nước</span>
                           <span className="text-right">Điểm</span>
@@ -530,7 +530,7 @@ export const ReviewScreen: React.FC<ReviewScreenProps> = ({
                                 >
                                   {line.move_san}
                                 </span>
-                                <span className="text-zinc-500">
+                                <span className="text-zinc-400">
                                   {line.pv_san.slice(1, 5).join(' ')}
                                 </span>
                                 {isPlayed && (
@@ -544,11 +544,11 @@ export const ReviewScreen: React.FC<ReviewScreenProps> = ({
                               </span>
                               <span className="text-right w-[4.5rem] shrink-0">
                                 {gain === null ? (
-                                  <span className="text-zinc-600 text-[11px] font-mono">
+                                  <span className="text-zinc-400 text-[11px] font-mono">
                                     —
                                   </span>
                                 ) : isPlayed ? (
-                                  <span className="text-[11px] font-mono text-zinc-500">
+                                  <span className="text-[11px] font-mono text-zinc-400">
                                     chuẩn
                                   </span>
                                 ) : (
@@ -572,14 +572,14 @@ export const ReviewScreen: React.FC<ReviewScreenProps> = ({
                             </div>
                           );
                         })}
-                        <div className="text-[10px] text-zinc-600 text-right font-mono">
+                        <div className="text-[10px] text-zinc-400 text-right font-mono">
                           depth ~{detail.lines[0]?.depth ?? '—'} · gain tính
                           theo % cơ hội thắng của{' '}
                           {selectedMove.turn === 'w' ? 'Trắng' : 'Đen'}
                         </div>
                       </>
                     ) : (
-                      <div className="text-[11px] text-zinc-600 text-center py-1">
+                      <div className="text-[11px] text-zinc-400 text-center py-1">
                         {detail
                           ? `Thế cờ đã kết thúc (${detail.result}).`
                           : 'Không phân tích được thế cờ này.'}

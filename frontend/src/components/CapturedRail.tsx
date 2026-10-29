@@ -1,69 +1,54 @@
 import React from 'react';
 
-interface CapturedRailProps {
+interface CapturedStripProps {
   /** Bên đã ăn quân (hiển thị quân đối phương bị bắt) */
   side: 'w' | 'b';
   symbols: string[];
   /** Chênh lệch vật chất dương nghiêng về bên này */
   diff: number;
-  height: number;
-  /** Lớp vị trí bổ sung (đặt rail vào khoảng trống bên cạnh bàn cờ) */
-  className?: string;
+  /** Kích thước bàn cờ (px) — suy ra cỡ quân & bề rộng tối đa của dải */
+  boardSize: number;
 }
 
 /**
- * Dải dọc hiển thị quân đối phương đã bị bắt, đặt trong khoảng trống
- * 2 bên bàn cờ. Quân lớn hơn trên, tự động xuống cột kế khi đầy chiều cao.
+ * Dải quân đối phương đã bị bắt, đặt trên-phải / dưới-trái cạnh bàn cờ
+ * (ngay hàng với PlayerCard). Quân có kích thước ~1/3 quân cờ thật,
+ * tự xuống hàng mới khi hết chỗ trong hàng hiện tại.
  */
-export const CapturedRail: React.FC<CapturedRailProps> = ({
+export const CapturedStrip: React.FC<CapturedStripProps> = ({
   side,
   symbols,
   diff,
-  height,
-  className = '',
-}) => (
-  <div
-    className={`flex flex-col items-center gap-1 shrink-0 select-none ${className}`}
-    style={{ height }}
-    title={
-      side === 'w'
-        ? 'Quân Đen mà bên Trắng đã bắt'
-        : 'Quân Trắng mà bên Đen đã bắt'
-    }
-  >
-    {/* Ô màu phía trên xác định bên ăn quân */}
-    <span
-      className={`w-3 h-3 rounded-sm border shrink-0 ${
-        side === 'w'
-          ? 'bg-zinc-100 border-zinc-300'
-          : 'bg-zinc-800 border-zinc-600'
-      }`}
-    />
+  boardSize,
+}) => {
+  // ~1/3 kích cỡ một ô (quân thật) trên bàn cờ
+  const piecePx = Math.max(13, Math.round(boardSize / 8 / 3));
+  const maxStripWidth = Math.round(boardSize * 0.52);
 
-    {/* Danh sách quân: xếp dọc, wrap sang cột mới khi hết chiều cao */}
+  return (
     <div
-      className="flex-1 min-h-0 w-7 flex flex-col flex-wrap content-start gap-x-0 overflow-hidden"
-      style={{ maxHeight: height - 34 }}
+      className="flex flex-wrap items-center gap-x-1 gap-y-0.5 shrink-1 min-w-0 select-none"
+      style={{ maxWidth: maxStripWidth }}
+      title={
+        side === 'w'
+          ? 'Quân Đen mà bên Trắng đã bắt'
+          : 'Quân Trắng mà bên Đen đã bắt'
+      }
     >
       {symbols.map((s, i) => (
         <span
           key={i}
-          className={`text-xl leading-[1.35] ${
-            side === 'w' ? 'text-zinc-500' : 'text-zinc-200'
-          }`}
+          className={`leading-none ${side === 'w' ? 'text-zinc-400' : 'text-zinc-100'}`}
+          style={{ fontSize: piecePx }}
         >
           {s}
         </span>
       ))}
+      {diff > 0 && (
+        <span className="font-mono font-semibold text-emerald-400 text-xs leading-none shrink-0">
+          +{diff}
+        </span>
+      )}
     </div>
-
-    {/* Chênh lệch vật chất */}
-    <span
-      className={`shrink-0 text-[11px] font-mono font-bold tabular-nums ${
-        diff > 0 ? 'text-emerald-400' : 'text-zinc-700'
-      }`}
-    >
-      {diff > 0 ? `+${diff}` : '·'}
-    </span>
-  </div>
-);
+  );
+};

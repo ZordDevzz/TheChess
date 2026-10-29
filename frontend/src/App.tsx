@@ -27,7 +27,7 @@ import { EvalGraph } from './components/EvalGraph';
 import { Toasts, useToasts } from './components/Toasts';
 import { PromotionDialog } from './components/PromotionDialog';
 import { PlayerCard } from './components/PlayerCard';
-import { CapturedRail } from './components/CapturedRail';
+import { CapturedStrip } from './components/CapturedRail';
 import { PreMatchDialog } from './components/PreMatchDialog';
 import { GameOverDialog } from './components/GameOverDialog';
 import { ReviewScreen } from './components/ReviewScreen';
@@ -207,9 +207,10 @@ export const App: React.FC = () => {
     if (!el) return;
     const updateSize = () => {
       const rect = el.getBoundingClientRect();
-      // Để dư 2 bên cho CapturedRail đặt trong khoảng trống flanks
-      const availW = rect.width - 110;
-      const availH = rect.height - 32 - 68; // trừ 2 PlayerCard + gap
+      // Chừa nhỏ 2 bên; dải quân bắt nằm chung hàng PlayerCard (không chiếm thêm ngang)
+      const availW = rect.width - 24;
+      // Trừ 2 PlayerCard + dải quân có thể wrap thêm 1 hàng + gap
+      const availH = rect.height - 64 - 100;
       const optimal = Math.max(280, Math.floor(Math.min(availW, availH)));
       setBoardSize(optimal);
     };
@@ -899,7 +900,13 @@ export const App: React.FC = () => {
     side,
     isTurn: phase === 'playing' && chessInstance.turn() === side,
     isThinking: isAiThinking && aiPlayer === players[side],
-    materialDiff: side === 'w' ? material.diff : -material.diff,
+  });
+
+  const stripProps = (side: 'w' | 'b') => ({
+    side,
+    symbols: side === 'w' ? material.capturedByWhite : material.capturedByBlack,
+    diff: side === 'w' ? material.diff : -material.diff,
+    boardSize,
   });
 
   return (
@@ -911,7 +918,7 @@ export const App: React.FC = () => {
             TheChess
           </span>
 
-          <span className="text-zinc-700">/</span>
+          <span className="text-zinc-400">/</span>
 
           <div className="flex items-center gap-2 truncate">
             <span
@@ -940,7 +947,7 @@ export const App: React.FC = () => {
         {/* Cụm công cụ phải tối giản */}
         <div className="flex items-center gap-2 shrink-0">
           {status?.stockfish_ready && (
-            <span className="hidden md:inline-block text-[11px] font-mono text-zinc-500 mr-1">
+            <span className="hidden md:inline-block text-[11px] font-mono text-zinc-400 mr-1">
               {modeLabel}
               {phase === 'playing'
                 ? ` · ${ANALYSIS_LEVEL_LABELS[config.analysis].label}`
@@ -1022,25 +1029,22 @@ export const App: React.FC = () => {
           className="relative flex-1 min-w-0 min-h-0 h-full bg-[#0c0c0e] flex items-center justify-center p-4 overflow-hidden"
         >
           {activeTab === 'play' && (
-            <>
-              {/* Quân Trắng đã bắt — đặt vào khoảng trống bên trái bàn cờ */}
-              <CapturedRail
-                className="absolute left-5 top-1/2 -translate-y-1/2 z-0"
-                side="w"
-                symbols={material.capturedByWhite}
-                diff={material.diff}
-                height={boardSize}
-              />
-
-              <div className="flex flex-col items-center gap-1.5">
-                <div style={{ width: boardSize }}>
+            <div className="flex flex-col items-center gap-1.5">
+              {/* Trên: thẻ người chơi trái · quân topSide đã bắt (phải) */}
+              <div
+                style={{ width: boardSize }}
+                className="flex items-center justify-between gap-2"
+              >
+                <div className="flex-1 min-w-0">
                   <PlayerCard {...playerCardProps(topSide)} />
                 </div>
+                <CapturedStrip {...stripProps(topSide)} />
+              </div>
 
-                <div
-                  style={{ width: boardSize, height: boardSize }}
-                  className="relative rounded-sm overflow-hidden shadow-2xl border border-zinc-800/90 shrink-0"
-                >
+              <div
+                style={{ width: boardSize, height: boardSize }}
+                className="relative rounded-sm overflow-hidden shadow-2xl border border-zinc-800/90 shrink-0"
+              >
                   <Chessboard
                     id="TheChessStudioBoard"
                     boardWidth={boardSize}
@@ -1091,20 +1095,17 @@ export const App: React.FC = () => {
                   )}
                 </div>
 
-                <div style={{ width: boardSize }}>
-                  <PlayerCard {...playerCardProps(bottomSide)} />
+                {/* Dưới: quân bottomSide đã bắt (trái) · thẻ người chơi phải */}
+                <div
+                  style={{ width: boardSize }}
+                  className="flex items-center justify-between gap-2"
+                >
+                  <CapturedStrip {...stripProps(bottomSide)} />
+                  <div className="flex-1 min-w-0 flex justify-end">
+                    <PlayerCard {...playerCardProps(bottomSide)} />
+                  </div>
                 </div>
               </div>
-
-              {/* Quân Đen đã bắt — đặt vào khoảng trống bên phải bàn cờ */}
-              <CapturedRail
-                className="absolute right-5 top-1/2 -translate-y-1/2 z-0"
-                side="b"
-                symbols={material.capturedByBlack}
-                diff={-material.diff}
-                height={boardSize}
-              />
-            </>
           )}
 
           {activeTab === 'editor' && (

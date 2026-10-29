@@ -163,7 +163,7 @@ export const BoardEditor: React.FC<BoardEditorProps> = ({
         <div className="flex items-center justify-between border-b border-zinc-800/80 pb-3">
           <div>
             <h3 className="text-xs font-semibold text-zinc-100">Thiết lập bàn cờ</h3>
-            <p className="text-xs text-zinc-500 mt-0.5">
+            <p className="text-xs text-zinc-400 mt-0.5">
               Chọn quân cờ bên dưới rồi nhấn vào ô cờ để đặt hoặc xóa.
             </p>
           </div>
@@ -227,7 +227,7 @@ export const BoardEditor: React.FC<BoardEditorProps> = ({
                 }`}
               >
                 <span className="text-xl leading-none">{p.symbol}</span>
-                <span className="text-[10px] font-mono text-zinc-500 mt-1">{p.code}</span>
+                <span className="text-[10px] font-mono text-zinc-400 mt-1">{p.code}</span>
               </button>
             ))}
           </div>
@@ -244,7 +244,7 @@ export const BoardEditor: React.FC<BoardEditorProps> = ({
                 }`}
               >
                 <span className="text-xl leading-none">{p.symbol}</span>
-                <span className="text-[10px] font-mono text-zinc-500 mt-1">{p.code}</span>
+                <span className="text-[10px] font-mono text-zinc-400 mt-1">{p.code}</span>
               </button>
             ))}
           </div>
@@ -370,7 +370,7 @@ export const BoardEditor: React.FC<BoardEditorProps> = ({
       <button
         disabled={!validation.valid && !pgnInput.trim()}
         onClick={() => onApplyPosition(fenInput, pgnInput.trim() || undefined)}
-        className="w-full py-2 px-4 rounded-lg bg-zinc-100 hover:bg-white disabled:bg-zinc-900 disabled:text-zinc-600 font-medium text-xs text-zinc-950 transition cursor-pointer"
+        className="w-full py-2 px-4 rounded-lg bg-zinc-100 hover:bg-white disabled:bg-zinc-900 disabled:text-zinc-400 font-medium text-xs text-zinc-950 transition cursor-pointer"
       >
         Áp dụng thế cờ
       </button>

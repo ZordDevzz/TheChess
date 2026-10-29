@@ -42,7 +42,7 @@ export const GameOverDialog: React.FC<GameOverDialogProps> = ({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between">
-          <span className="text-[10px] uppercase tracking-widest text-zinc-500">
+          <span className="text-[10px] uppercase tracking-widest text-zinc-400">
             Kết thúc ván đấu
           </span>
           <button

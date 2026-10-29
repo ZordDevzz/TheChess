@@ -61,7 +61,7 @@ export const EvalGraph: React.FC<EvalGraphProps> = ({
                 <span className="w-2.5 h-2.5 rounded-sm bg-zinc-100 border border-zinc-300 inline-block" />
                 {reviewResult.white_accuracy}%
               </span>
-              <span className="text-zinc-600">·</span>
+              <span className="text-zinc-400">·</span>
               <span className="flex items-center gap-1" title="Độ chính xác bên Đen">
                 <span className="w-2.5 h-2.5 rounded-sm bg-zinc-800 border border-zinc-600 inline-block" />
                 {reviewResult.black_accuracy}%
@@ -89,7 +89,7 @@ export const EvalGraph: React.FC<EvalGraphProps> = ({
                     ? 'Chấm điểm toàn ván bằng engine'
                     : 'Bị tắt khi đang thi đấu (chế độ chơi với máy)'
                 }
-                className="px-2.5 py-0.5 rounded bg-zinc-200 hover:bg-white disabled:bg-zinc-900 disabled:text-zinc-600 text-xs font-medium text-zinc-950 transition cursor-pointer"
+                className="px-2.5 py-0.5 rounded bg-zinc-200 hover:bg-white disabled:bg-zinc-900 disabled:text-zinc-400 text-xs font-medium text-zinc-950 transition cursor-pointer"
               >
                 {isReviewing ? 'Đang chấm...' : 'Game Review'}
               </button>

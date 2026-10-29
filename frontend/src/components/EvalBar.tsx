@@ -17,7 +17,7 @@ export const EvalBar: React.FC<EvalBarProps> = ({
 }) => {
   if (!enabled) {
     return (
-      <div className="w-5 h-full bg-zinc-900/60 border border-zinc-800/80 rounded-sm flex items-center justify-center text-[9px] text-zinc-600 select-none">
+      <div className="w-5 h-full bg-zinc-900/60 border border-zinc-800/80 rounded-sm flex items-center justify-center text-[9px] text-zinc-400 select-none">
         –
       </div>
     );

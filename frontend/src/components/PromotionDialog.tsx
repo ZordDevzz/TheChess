@@ -40,7 +40,7 @@ export const PromotionDialog: React.FC<PromotionDialogProps> = ({
             <span className="text-3xl leading-none">
               {color === 'w' ? p.white : p.black}
             </span>
-            <span className="text-[9px] font-mono text-zinc-500 mt-1.5">
+            <span className="text-[9px] font-mono text-zinc-400 mt-1.5">
               {p.name}
             </span>
           </button>

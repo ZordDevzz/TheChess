@@ -232,7 +232,7 @@ export const MoveHistory: React.FC<MoveHistoryProps> = ({
       {/* Bảng PGN cuộn nội bộ có chỉ báo màu từng nước */}
       <div className="flex-1 min-h-0 overflow-y-auto rounded border border-zinc-800/60 bg-[#0b0b0d] divide-y divide-zinc-900/60">
         {pairs.length === 0 ? (
-          <div className="h-full flex items-center justify-center text-xs text-zinc-600 px-4 text-center">
+          <div className="h-full flex items-center justify-center text-xs text-zinc-400 px-4 text-center">
             Chưa có nước đi.
           </div>
         ) : (
@@ -241,7 +241,7 @@ export const MoveHistory: React.FC<MoveHistoryProps> = ({
               key={pair.moveNumber}
               className="grid grid-cols-7 items-center text-xs py-1 px-2.5 hover:bg-zinc-900/40"
             >
-              <span className="col-span-1 text-zinc-600 font-mono text-xs tabular-nums">
+              <span className="col-span-1 text-zinc-400 font-mono text-xs tabular-nums">
                 {pair.moveNumber}.
               </span>
 

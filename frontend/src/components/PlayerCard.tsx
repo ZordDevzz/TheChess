@@ -7,17 +7,14 @@ interface PlayerCardProps {
   side: 'w' | 'b';
   isTurn: boolean;
   isThinking?: boolean;
-  /** Chênh lệch vật chất (>0 = bên này đang hơn) */
-  materialDiff: number;
 }
 
-/** Thẻ người chơi hiển thị tên, loại (người/AI) và chênh lệch vật chất. */
+/** Thẻ người chơi hiển thị tên, loại (người/AI). Quân đã bắt nằm ở dải cạnh bàn cờ. */
 export const PlayerCard: React.FC<PlayerCardProps> = ({
   player,
   side,
   isTurn,
   isThinking,
-  materialDiff,
 }) => (
   <div
     className={`w-full flex items-center gap-2 px-2.5 py-1 rounded-md border text-xs transition ${
@@ -56,12 +53,6 @@ export const PlayerCard: React.FC<PlayerCardProps> = ({
 
     <span className="flex-1" />
 
-    {/* Chênh lệch vật chất (danh sách quân đã bắt nằm ở 2 biên bàn cờ) */}
-    {materialDiff > 0 && (
-      <span className="shrink-0 font-mono font-semibold text-emerald-400">
-        +{materialDiff}
-      </span>
-    )}
     {isTurn && !isThinking && (
       <span className="shrink-0 w-1.5 h-1.5 rounded-full bg-sky-400 animate-pulse" />
     )}

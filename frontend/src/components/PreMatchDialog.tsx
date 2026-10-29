@@ -115,7 +115,7 @@ export const PreMatchDialog: React.FC<PreMatchDialogProps> = ({
             <h3 className="text-sm font-semibold text-zinc-100">
               Chuẩn bị ván đấu
             </h3>
-            <p className="text-[11px] text-zinc-500 mt-0.5">
+            <p className="text-[11px] text-zinc-400 mt-0.5">
               {hasMoves
                 ? 'Ván cũ chưa hoàn tất — cấu hình lại sẽ giữ nguyên các nước đã đi.'
                 : 'Chọn chế độ chơi và đối thủ trước khi bắt đầu.'}
@@ -152,7 +152,7 @@ export const PreMatchDialog: React.FC<PreMatchDialogProps> = ({
                   {MODE_ICONS[preset.id]}
                   {preset.label}
                 </div>
-                <div className="text-[9px] text-zinc-500 mt-1 leading-snug">
+                <div className="text-[9px] text-zinc-400 mt-1 leading-snug">
                   {preset.description}
                 </div>
                 {!preset.enabled && (
@@ -257,7 +257,7 @@ export const PreMatchDialog: React.FC<PreMatchDialogProps> = ({
                 <div className="font-medium text-zinc-100 text-[11px] flex items-center gap-1">
                   <Bot className="w-3 h-3" /> Maia
                 </div>
-                <div className="text-[9px] text-zinc-500 mt-0.5">
+                <div className="text-[9px] text-zinc-400 mt-0.5">
                   1100–1900
                 </div>
               </button>
@@ -272,7 +272,7 @@ export const PreMatchDialog: React.FC<PreMatchDialogProps> = ({
                 <div className="font-medium text-zinc-100 text-[11px] flex items-center gap-1">
                   <Bot className="w-3 h-3" /> Stockfish
                 </div>
-                <div className="text-[9px] text-zinc-500 mt-0.5">
+                <div className="text-[9px] text-zinc-400 mt-0.5">
                   1320–3190
                 </div>
               </button>
@@ -345,7 +345,7 @@ export const PreMatchDialog: React.FC<PreMatchDialogProps> = ({
                     <div className="text-[11px] font-medium text-zinc-100">
                       {ANALYSIS_LEVEL_LABELS[lvl].label}
                     </div>
-                    <div className="text-[9px] text-zinc-500 mt-0.5 leading-snug">
+                    <div className="text-[9px] text-zinc-400 mt-0.5 leading-snug">
                       {ANALYSIS_LEVEL_LABELS[lvl].description}
                     </div>
                   </button>
