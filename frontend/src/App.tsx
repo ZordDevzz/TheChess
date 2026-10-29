@@ -27,7 +27,7 @@ import { EvalGraph } from './components/EvalGraph';
 import { Toasts, useToasts } from './components/Toasts';
 import { PromotionDialog } from './components/PromotionDialog';
 import { PlayerCard } from './components/PlayerCard';
-import { CapturedStrip } from './components/CapturedRail';
+import { CapturedRail } from './components/CapturedRail';
 import { PreMatchDialog } from './components/PreMatchDialog';
 import { GameOverDialog } from './components/GameOverDialog';
 import { ReviewScreen } from './components/ReviewScreen';
@@ -207,8 +207,9 @@ export const App: React.FC = () => {
     if (!el) return;
     const updateSize = () => {
       const rect = el.getBoundingClientRect();
-      const availW = rect.width - 24;
-      // Trừ 2 PlayerCard + gap (dải quân bắt overlay trên góc bàn, không chiếm chỗ)
+      // Trừ 2 CapturedRail (w-10) + gap + padding 2 bên
+      const availW = rect.width - 130;
+      // Trừ 2 PlayerCard + gap
       const availH = rect.height - 64;
       const optimal = Math.max(280, Math.floor(Math.min(availW, availH)));
       setBoardSize(optimal);
@@ -901,7 +902,7 @@ export const App: React.FC = () => {
     isThinking: isAiThinking && aiPlayer === players[side],
   });
 
-  const stripProps = (side: 'w' | 'b') => ({
+  const railProps = (side: 'w' | 'b') => ({
     side,
     symbols: side === 'w' ? material.capturedByWhite : material.capturedByBlack,
     diff: side === 'w' ? material.diff : -material.diff,
@@ -1028,11 +1029,15 @@ export const App: React.FC = () => {
           className="relative flex-1 min-w-0 min-h-0 h-full bg-[#0c0c0e] flex items-center justify-center p-4 overflow-hidden"
         >
           {activeTab === 'play' && (
-            <div className="flex flex-col items-center gap-1.5">
-              {/* Trên: thẻ người chơi của bên ở trên bàn */}
-              <div style={{ width: boardSize }}>
-                <PlayerCard {...playerCardProps(topSide)} />
-              </div>
+            /* 3 cột: rail quân bắt trái · cột giữa (tên + bàn + tên) · rail phải */
+            <div className="flex items-center gap-2.5">
+              <CapturedRail {...railProps('w')} />
+
+              <div className="flex flex-col items-center gap-1.5">
+                {/* Trên: thẻ người chơi của bên ở trên bàn */}
+                <div style={{ width: boardSize }}>
+                  <PlayerCard {...playerCardProps(topSide)} />
+                </div>
 
               <div
                 style={{ width: boardSize, height: boardSize }}
@@ -1076,7 +1081,7 @@ export const App: React.FC = () => {
                   )}
 
                   {/* Nút mở lại tổng kết sau khi đóng modal */}
-                    {phase === 'finished' && !showGameOver && !reviewMode && (
+                  {phase === 'finished' && !showGameOver && !reviewMode && (
                     <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10">
                       <button
                         onClick={() => setShowGameOver(true)}
@@ -1086,16 +1091,6 @@ export const App: React.FC = () => {
                       </button>
                     </div>
                   )}
-
-                  {/* Quân topSide đã bắt — góc trên phải của bàn cờ */}
-                  <div className="absolute top-1 right-1 z-10 pointer-events-none">
-                    <CapturedStrip {...stripProps(topSide)} />
-                  </div>
-
-                  {/* Quân bottomSide đã bắt — góc dưới trái của bàn cờ */}
-                  <div className="absolute bottom-1 left-1 z-10 pointer-events-none">
-                    <CapturedStrip {...stripProps(bottomSide)} />
-                  </div>
                 </div>
 
                 {/* Dưới: thẻ người chơi của bên ở dưới bàn */}
@@ -1103,6 +1098,9 @@ export const App: React.FC = () => {
                   <PlayerCard {...playerCardProps(bottomSide)} />
                 </div>
               </div>
+
+              <CapturedRail {...railProps('b')} />
+            </div>
           )}
 
           {activeTab === 'editor' && (
