@@ -73,6 +73,7 @@ import { useGameReview } from './hooks/useGameReview';
 import { useChessClock } from './hooks/useChessClock';
 import { useMatchSync } from './hooks/useMatchSync';
 import { useAnalysisController } from './hooks/useAnalysisController';
+import { useLiveClassification } from './hooks/useLiveClassification';
 import { AuthProvider, useAuth } from './context/AuthContext';
 
 // Code splitting (P2-2): các màn hình nặng chỉ tải khi cần tới
@@ -343,6 +344,17 @@ const AppShell: React.FC<AppShellProps> = ({
     activeTab,
     isSpectator,
     phase,
+    setMoves,
+  });
+
+  // Phân loại realtime cho nước đi ĐỒNG BỘ TỪ SERVER (khán giả xem live /
+  // nước của đối thủ online) — executeMove chỉ classify nước người chơi tự đi.
+  useLiveClassification({
+    enabled:
+      screen === 'match' &&
+      activeTab === 'play' &&
+      (isSpectator || visibility.classifyLive),
+    moves,
     setMoves,
   });
 
