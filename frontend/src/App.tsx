@@ -659,6 +659,16 @@ const AppShell: React.FC<AppShellProps> = ({
             pushToast('Một ván đấu của bạn đã kết thúc.', 'info');
           }
           break;
+        case 'mention':
+          pushToast(
+            `${String(p.from_display_name ?? 'Ai đó')} đã nhắc đến bạn trong chat.`,
+            'info'
+          );
+          notifyBrowser(
+            'Được nhắc đến',
+            `${String(p.from_display_name ?? 'Kỳ thủ')} đã nhắc đến bạn trong chat.`
+          );
+          break;
         default:
           // 'dm': badge chuông là đủ — tránh spam toast
           break;
@@ -758,7 +768,9 @@ const AppShell: React.FC<AppShellProps> = ({
     }).catch((err) => console.error('Lỗi lưu Game Review vào DB:', err));
   }, [reviewResult, activeMatch]);
 
-  // Phát hiện kết thúc ván trên bàn cờ
+  // Hiển thị dialog kết thúc cục bộ (optimistic). KẾT QUẢ thật do trọng tài
+  // server chấm trong append_move/runner — client không tự gọi finish nữa;
+  // useMatchSync sẽ đồng bộ status + termination từ server qua WS/poll.
   useEffect(() => {
     if (phase !== 'playing') return;
     if (currentPly !== moves.length) return;
@@ -768,28 +780,8 @@ const AppShell: React.FC<AppShellProps> = ({
       setPhase('finished');
       setShowGameOver(true);
       setHintArrow(null);
-
-      if (activeMatch && activeMatch.status === 'playing' && !isSpectator) {
-        finishMatchApi(activeMatch.id, info.result, info.reason)
-          .then((res) => {
-            setActiveMatch(res.match);
-            if (currentUser) {
-              refreshCurrentUser().catch(() => {});
-            }
-          })
-          .catch((err) => console.error('Lỗi lưu kết quả ván đấu:', err));
-      }
     }
-  }, [
-    phase,
-    currentFen,
-    currentPly,
-    moves.length,
-    activeMatch,
-    isSpectator,
-    currentUser,
-    refreshCurrentUser,
-  ]);
+  }, [phase, currentFen, currentPly, moves.length]);
 
   // Phím tắt điều hướng ván cờ: ← → Home End
   useEffect(() => {
@@ -1408,7 +1400,10 @@ const AppShell: React.FC<AppShellProps> = ({
     setShowGameOver(true);
 
     if (activeMatch && activeMatch.status === 'playing') {
-      finishMatchApi(activeMatch.id, result, 'resign')
+      // Result do server tính từ player_user_id (bên xin thua).
+      const resigningUserId =
+        resigning === 'w' ? activeMatch.white_user_id : activeMatch.black_user_id;
+      finishMatchApi(activeMatch.id, 'resign', resigningUserId)
         .then((res) => {
           setActiveMatch(res.match);
           if (currentUser) refreshCurrentUser().catch(() => {});

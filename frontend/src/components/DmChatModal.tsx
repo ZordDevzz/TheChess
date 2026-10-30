@@ -51,6 +51,7 @@ export const DmChatModal: React.FC<DmChatModalProps> = ({
             topic={buildDmTopic(currentUser.id, target.id)}
             currentUser={currentUser}
             getName={(id) => (id === target.id ? target.display_name : 'Bạn')}
+            getUsername={(id) => (id === target.id ? target.username : currentUser.username)}
             heightClass="h-72"
             placeholder={`Nhắn tới ${target.display_name}…`}
           />

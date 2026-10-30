@@ -1495,6 +1495,13 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
           <LobbyChat
             currentUser={currentUser}
             knownUsers={[...playersList, ...(lobby?.bots ?? [])]}
+            canModerate={currentUser.role === 'admin'}
+            onManageUser={(senderId) => {
+              const u = [...playersList, ...(lobby?.bots ?? [])].find(
+                (p) => p.id === senderId
+              );
+              if (u) setProfileUser(u);
+            }}
             fillHeight
           />
         </section>

@@ -192,7 +192,8 @@ export type NotificationKind =
   | 'match_started'
   | 'match_finished'
   | 'turn'
-  | 'dm';
+  | 'dm'
+  | 'mention';
 
 export interface NotificationItem {
   id: string;

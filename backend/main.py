@@ -8,6 +8,7 @@ FastAPI Backend cho TheChess:
 import asyncio
 import json
 import os
+import re
 import socket
 import subprocess
 import time
@@ -641,6 +642,18 @@ def _validate_chat_topic(topic: str) -> Optional[str]:
     return "Topic chat không hợp lệ (lobby | match:<id> | dm:<a>:<b>)."
 
 
+def _extract_mentions(body: str) -> List[str]:
+    """Lấy các @username trong nội dung chat (duy nhất, giữ thứ tự xuất hiện)."""
+    seen: set = set()
+    out: List[str] = []
+    for m in re.finditer(r"@([A-Za-z0-9_]{3,64})", body):
+        username = m.group(1)
+        if username.lower() not in seen:
+            seen.add(username.lower())
+            out.append(username)
+    return out
+
+
 async def _notify_user(
     user_id: str, kind: str, payload: Optional[Dict[str, Any]] = None
 ) -> None:
@@ -1162,29 +1175,17 @@ async def append_match_move_endpoint(
                 detail="Không được mạo danh kỳ thủ khác để đi nước.",
             )
     try:
-        detail = db_manager.append_move(match_id, req)
-        board = chess.Board(detail.fen_after)
-        if board.is_game_over():
-            res = board.result()
-            if res in ("1-0", "0-1", "1/2-1/2"):
-                term = (
-                    "checkmate"
-                    if board.is_checkmate()
-                    else "stalemate"
-                    if board.is_stalemate()
-                    else "insufficient"
-                    if board.is_insufficient_material()
-                    else "threefold"
-                    if board.is_repetition(3)
-                    else "draw"
-                )
-                db_manager.complete_match(match_id, result=res, termination=term)
-                await _notify_match_finished(match_id)
-        else:
-            await _notify_turn_if_human(match_id)
+        # Trọng tài server-side nằm trong append_move: nếu nước này khép lại ván
+        # (kể cả hòa claim 3-lần-lặp / 50 nước) match được chấm ngay tại đây.
+        db_manager.append_move(match_id, req)
         details = db_manager.get_match_with_details(match_id)
         assert details is not None
-        await _broadcast_match_event(match_id, "match_updated")
+        if details.match.status == "finished":
+            await _notify_match_finished(match_id)
+            await _broadcast_match_event(match_id, "match_finished")
+        else:
+            await _notify_turn_if_human(match_id)
+            await _broadcast_match_event(match_id, "match_updated")
         return details
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -1221,9 +1222,56 @@ async def finish_match_endpoint(
     req: FinishMatchRequest,
     user: UserRecord = Depends(get_current_user),
 ) -> MatchWithDetailsResponse:
+    """
+    Kết thúc ván theo hành động hợp lệ — result LUÔN do server tính/tính chứng
+    từ biên bản & đồng hồ phía server, không nhận result tự khai từ client.
+    """
     _require_match_participant(match_id, user)
+    match = db_manager.get_match_record(match_id)
+    if match is None:
+        raise HTTPException(status_code=404, detail="Không tìm thấy trận đấu.")
+    if match.status != "playing":
+        raise HTTPException(status_code=409, detail="Ván đấu đã kết thúc.")
+
     try:
-        db_manager.complete_match(match_id, result=req.result, termination=req.termination)
+        if req.result is not None:
+            # Chấm cưỡng bức — chỉ Admin.
+            if user.role != "admin":
+                raise HTTPException(
+                    status_code=403,
+                    detail="Chỉ Admin mới được chấm kết quả tùy ý.",
+                )
+            db_manager.complete_match(
+                match_id, result=req.result, termination=req.termination or "admin_decision"
+            )
+        elif req.action == "resign":
+            loser_id = req.player_user_id or user.id
+            if loser_id not in (match.white_user_id, match.black_user_id):
+                raise HTTPException(
+                    status_code=400, detail="Kỳ thủ không thuộc ván đấu này."
+                )
+            if user.role != "admin" and loser_id != user.id:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Không được xin thua hộ kỳ thủ khác.",
+                )
+            result = "0-1" if loser_id == match.white_user_id else "1-0"
+            db_manager.complete_match(match_id, result=result, termination="Đầu hàng")
+        elif req.action == "timeout":
+            flagged = db_manager.flag_timeout(match_id)
+            if flagged is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Đồng hồ của bên đang đi chưa hết giờ.",
+                )
+        else:  # claim_draw — server tự chứng minh thế cờ có hòa hợp lệ
+            settled = db_manager.settle_match_if_over(match_id)
+            if settled is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Thế cờ hiện tại không có hòa hợp lệ (lặp 3 lần / 50 nước).",
+                )
+
         await _notify_match_finished(match_id)
         details = db_manager.get_match_with_details(match_id)
         assert details is not None
@@ -1323,6 +1371,7 @@ async def send_chat_message_endpoint(
         )
     msg = db_manager.create_chat_message(topic, user.id, body)
     sender = db_manager.get_user_by_id(user.id)
+    sender_name = sender.display_name if sender else user.username
     await topic_hub.publish(
         topic,
         {
@@ -1330,11 +1379,25 @@ async def send_chat_message_endpoint(
             "type": "chat",
             "message_id": msg["id"],
             "sender_id": user.id,
-            "sender_name": sender.display_name if sender else user.username,
+            "sender_name": sender_name,
             "body": body,
             "created_at": msg["created_at"],
         },
     )
+    # Mention @username -> notification cho người được nhắc (trừ chính sender)
+    for username in _extract_mentions(body):
+        mentioned = db_manager.get_user_by_username(username)
+        if mentioned and mentioned.id != user.id and not mentioned.is_bot:
+            await _notify_user(
+                mentioned.id,
+                "mention",
+                {
+                    "topic": topic,
+                    "from_user_id": user.id,
+                    "from_display_name": sender_name,
+                    "preview": body[:80],
+                },
+            )
     # DM tới người offline: kèm notification để có badge chuông khi đăng nhập lại
     if topic.startswith("dm:"):
         parts = topic.split(":")

@@ -133,7 +133,7 @@ def test_match_chat_locked_after_finish_but_retained(client, players):
     # Kết thúc ván (alice đầu hàng)
     resp = client.post(
         f"/api/matches/{match['match']['id']}/finish",
-        json={"result": "0-1", "termination": "resign"},
+        json={"action": "resign"},
         headers=alice["headers"],
     )
     assert resp.status_code == 200
@@ -222,7 +222,7 @@ def test_turn_and_finished_notifications(client, players):
     # Kết thúc ván -> cả 2 kỳ thủ nhận 'match_finished'
     resp = client.post(
         f"/api/matches/{match_id}/finish",
-        json={"result": "1-0", "termination": "resign"},
+        json={"action": "resign"},
         headers=bob["headers"],
     )
     assert resp.status_code == 200
@@ -246,6 +246,36 @@ def test_mark_notifications_read(client, players):
     assert resp.status_code == 200
     assert resp.json()["unread"] == 0
     assert resp.json()["marked"] == unread
+
+
+def test_mention_creates_notification(client, players):
+    """@username trong chat -> notification kind 'mention' cho người được nhắc."""
+    alice, bob = players["alice"], players["bob"]
+    resp = client.post(
+        "/api/chat/lobby/messages",
+        json={"body": "chào @bob coi ván này với"},
+        headers=alice["headers"],
+    )
+    assert resp.status_code == 200, resp.text
+
+    resp = client.get("/api/notifications", headers=bob["headers"])
+    mentions = [
+        n
+        for n in resp.json()["notifications"]
+        if n["kind"] == "mention" and n["payload"]["from_display_name"] == "Alice"
+    ]
+    assert mentions, "bob phải nhận notification 'mention' khi alice nhắc @bob"
+    assert "chào @bob" in mentions[0]["payload"]["preview"]
+
+    # Không tự nhắc chính mình, không nhắc user không tồn tại
+    resp = client.post(
+        "/api/chat/lobby/messages",
+        json={"body": "@alice tự nhắc @khongtontai999"},
+        headers=alice["headers"],
+    )
+    assert resp.status_code == 200
+    resp = client.get("/api/notifications", headers=alice["headers"])
+    assert not [n for n in resp.json()["notifications"] if n["kind"] == "mention"]
 
 
 # ---------------------------------------------------------------------------

@@ -100,6 +100,13 @@ function describeNotification(n: NotificationItem): {
         )}`,
         hasMatch: false,
       };
+    case 'mention':
+      return {
+        text: `${String(p.from_display_name ?? 'Ai đó')} đã nhắc đến bạn: ${String(
+          p.preview ?? ''
+        )}`,
+        hasMatch: false,
+      };
     default:
       return { text: n.kind, hasMatch: false };
   }
@@ -184,11 +191,13 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({
 
   const handleItemClick = (n: NotificationItem) => {
     const p = n.payload as Record<string, unknown>;
-    if (n.kind === 'dm' && p.from_user_id) {
-      onOpenDm(
-        String(p.from_user_id),
-        String(p.from_display_name ?? 'Kỳ thủ')
-      );
+    if (n.kind === 'dm' || n.kind === 'mention') {
+      if (p.from_user_id) {
+        onOpenDm(
+          String(p.from_user_id),
+          String(p.from_display_name ?? 'Kỳ thủ')
+        );
+      }
     } else if (p.match_id) {
       onOpenMatch(String(p.match_id));
     }
@@ -273,7 +282,7 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({
             )}
             {notifications.map((n) => {
               const { text, hasMatch } = describeNotification(n);
-              const clickable = hasMatch || n.kind === 'dm';
+              const clickable = hasMatch || n.kind === 'dm' || n.kind === 'mention';
               return (
                 <button
                   key={n.id}
