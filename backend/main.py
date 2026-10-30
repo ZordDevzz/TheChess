@@ -183,6 +183,12 @@ async def get_status() -> Dict[str, Any]:
     return status
 
 
+@app.get("/health")
+async def health() -> Dict[str, str]:
+    """Healthcheck nhẹ cho orchestrator/monitor bên ngoài (không đụng engine pool)."""
+    return {"status": "ok"}
+
+
 @app.post("/api/analyze")
 async def analyze_position(req: AnalyzeRequest) -> Dict[str, Any]:
     try:
