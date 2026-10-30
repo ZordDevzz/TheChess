@@ -947,6 +947,16 @@ const AppShell: React.FC<AppShellProps> = ({
     [aiPlayer, isSpectator, executeMove, pushToast]
   );
 
+  // Giữ triggerAiMove mới nhất qua ref: identity của nó đổi liên tục mỗi tick
+  // đồng hồ (executeMove deps whiteClockMs/blackClockMs). Nếu để trực tiếp trong
+  // deps của effect bên dưới, cleanup sẽ clearTimeout mỗi 250ms < 300ms delay
+  // → timer không bao giờ fire → AI cầm Trắng "đóng băng" không đi nước đầu.
+  // (react.dev: "Reading the latest props and state from an Effect")
+  const triggerAiMoveRef = useRef(triggerAiMove);
+  useEffect(() => {
+    triggerAiMoveRef.current = triggerAiMove;
+  }, [triggerAiMove]);
+
   // AI tự đi khi tới lượt (chỉ khi ván đang chơi ở màn hình Match)
   useEffect(() => {
     if (screen !== 'match' || activeTab !== 'play') return;
@@ -965,7 +975,7 @@ const AppShell: React.FC<AppShellProps> = ({
 
     if (g.turn() !== playerColor) {
       const timer = setTimeout(() => {
-        triggerAiMove(currentFen);
+        triggerAiMoveRef.current(currentFen);
       }, 300);
       return () => clearTimeout(timer);
     }
@@ -980,7 +990,6 @@ const AppShell: React.FC<AppShellProps> = ({
     currentPly,
     moves.length,
     isAiThinking,
-    triggerAiMove,
   ]);
 
   // ------------------ Tương tác bàn cờ ------------------
