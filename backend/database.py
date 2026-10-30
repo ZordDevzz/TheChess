@@ -24,7 +24,7 @@ import threading
 import time
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
 
@@ -272,6 +272,35 @@ CREATE TABLE IF NOT EXISTS "lab_tournament" (
     created_at TEXT NOT NULL,
     finished_at TEXT
 );
+
+-- Chat thống nhất theo channel topic:
+--   'match:<id>' (chat trong trận, khán giả xem được) | 'lobby' (chat Sảnh)
+--   | 'dm:<userA>:<userB>' (id đã sort tăng dần).
+-- Chat trận giữ vĩnh viễn (chỉ khóa gửi khi ván kết thúc); Sảnh prune > 90 ngày.
+CREATE TABLE IF NOT EXISTS "chat_message" (
+    id TEXT PRIMARY KEY,
+    topic TEXT NOT NULL,
+    sender_id TEXT NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+    body TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS ix_chat_message_topic_created
+    ON "chat_message" (topic, created_at DESC);
+
+-- Thông báo cá nhân (channel user:{id}): kind = 'turn' | 'challenge' |
+-- 'match_finished' | 'dm'. WS chỉ push event nhẹ; nội dung nằm đây (nguồn truth HTTP).
+CREATE TABLE IF NOT EXISTS "notification" (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    read_at TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS ix_notification_user_read
+    ON "notification" (user_id, created_at DESC);
 """
 
 
@@ -2088,4 +2117,133 @@ class DatabaseManager:
             if item.is_system_exhibition:
                 return item
         return None
+
+    # ------------------------------------------------------------------
+    # Chat theo channel topic: 'match:<id>' | 'lobby' | 'dm:<a>:<b>'
+    # ------------------------------------------------------------------
+
+    def create_chat_message(self, topic: str, sender_id: str, body: str) -> Dict[str, Any]:
+        now = utc_now_iso()
+        msg_id = str(uuid.uuid4())
+        with self.connection() as conn:
+            conn.execute(
+                'INSERT INTO "chat_message" (id, topic, sender_id, body, created_at) VALUES (?, ?, ?, ?, ?)',
+                (msg_id, topic, sender_id, body, now),
+            )
+        return {"id": msg_id, "topic": topic, "sender_id": sender_id, "body": body, "created_at": now}
+
+    def list_chat_messages(
+        self, topic: str, before: Optional[str] = None, limit: int = 50
+    ) -> List[Dict[str, Any]]:
+        """Tin mới nhất trước `before` (cursor created_at DESC), trả về cũ -> mới."""
+        with self.read_connection() as conn:
+            if before:
+                rows = conn.execute(
+                    'SELECT * FROM "chat_message" WHERE topic = ? AND created_at < ? ORDER BY created_at DESC LIMIT ?',
+                    (topic, before, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    'SELECT * FROM "chat_message" WHERE topic = ? ORDER BY created_at DESC LIMIT ?',
+                    (topic, limit),
+                ).fetchall()
+        msgs = [
+            {"id": r["id"], "topic": r["topic"], "sender_id": r["sender_id"], "body": r["body"], "created_at": r["created_at"]}
+            for r in rows
+        ]
+        msgs.reverse()  # cũ -> mới để render trực tiếp
+        return msgs
+
+    def delete_chat_message(self, message_id: str) -> Optional[Dict[str, Any]]:
+        """Admin xóa 1 tin. Trả về tin đã xóa (để broadcast chat_deleted) hoặc None."""
+        with self.connection() as conn:
+            row = conn.execute(
+                'SELECT * FROM "chat_message" WHERE id = ?', (message_id,)
+            ).fetchone()
+            if not row:
+                return None
+            conn.execute('DELETE FROM "chat_message" WHERE id = ?', (message_id,))
+        return {"id": row["id"], "topic": row["topic"], "sender_id": row["sender_id"], "body": row["body"], "created_at": row["created_at"]}
+
+    def prune_lobby_chat(self, days: int = 90) -> int:
+        """Dọn tin chat Sảnh cũ hơn `days` ngày (chat trận + DM giữ vĩnh viễn)."""
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(days=days)
+        ).isoformat()
+        with self.connection() as conn:
+            cur = conn.execute(
+                "DELETE FROM \"chat_message\" WHERE topic = 'lobby' AND created_at < ?",
+                (cutoff,),
+            )
+            return cur.rowcount or 0
+
+    # ------------------------------------------------------------------
+    # Thông báo cá nhân (channel user:{id})
+    # ------------------------------------------------------------------
+
+    def create_notification(
+        self, user_id: str, kind: str, payload: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        now = utc_now_iso()
+        nid = str(uuid.uuid4())
+        with self.connection() as conn:
+            conn.execute(
+                'INSERT INTO "notification" (id, user_id, kind, payload_json, created_at) VALUES (?, ?, ?, ?, ?)',
+                (nid, user_id, kind, json.dumps(payload or {}), now),
+            )
+        return {"id": nid, "user_id": user_id, "kind": kind, "payload": payload or {}, "created_at": now, "read_at": None}
+
+    def list_notifications(self, user_id: str, limit: int = 30) -> List[Dict[str, Any]]:
+        with self.read_connection() as conn:
+            rows = conn.execute(
+                'SELECT * FROM "notification" WHERE user_id = ? ORDER BY created_at DESC LIMIT ?',
+                (user_id, limit),
+            ).fetchall()
+        return [
+            {
+                "id": r["id"],
+                "user_id": r["user_id"],
+                "kind": r["kind"],
+                "payload": json.loads(r["payload_json"]),
+                "read_at": r["read_at"],
+                "created_at": r["created_at"],
+            }
+            for r in rows
+        ]
+
+    def count_unread_notifications(self, user_id: str) -> int:
+        with self.read_connection() as conn:
+            row = conn.execute(
+                'SELECT COUNT(*) AS c FROM "notification" WHERE user_id = ? AND read_at IS NULL',
+                (user_id,),
+            ).fetchone()
+        return int(row["c"]) if row else 0
+
+    def mark_notifications_read(
+        self,
+        user_id: str,
+        notification_ids: Optional[List[str]] = None,
+        kind: Optional[str] = None,
+    ) -> int:
+        """Đánh dấu đã đọc. Không truyền ids = đánh dấu tất cả (lọc thêm `kind` nếu có)."""
+        now = utc_now_iso()
+        with self.connection() as conn:
+            if notification_ids:
+                placeholders = ",".join("?" for _ in notification_ids)
+                cur = conn.execute(
+                    f'UPDATE "notification" SET read_at = ? WHERE user_id = ? AND read_at IS NULL AND id IN ({placeholders})',
+                    (now, user_id, *notification_ids),
+                )
+            else:
+                if kind:
+                    cur = conn.execute(
+                        'UPDATE "notification" SET read_at = ? WHERE user_id = ? AND read_at IS NULL AND kind = ?',
+                        (now, user_id, kind),
+                    )
+                else:
+                    cur = conn.execute(
+                        'UPDATE "notification" SET read_at = ? WHERE user_id = ? AND read_at IS NULL',
+                        (now, user_id),
+                    )
+            return cur.rowcount or 0
 

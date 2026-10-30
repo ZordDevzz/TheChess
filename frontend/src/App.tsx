@@ -20,6 +20,7 @@ import {
   EngineStatus,
   GameConfig,
   AssistantEngineConfig,
+  NotificationItem,
   GameOverInfo,
   GamePhase,
   MatchRecord,
@@ -40,6 +41,14 @@ import { PreMatchDialog } from './components/PreMatchDialog';
 import { GameOverDialog } from './components/GameOverDialog';
 import { LoginScreen, ChangePasswordModal } from './components/LoginScreen';
 import { UserDropdownMenu } from './components/UserDropdownMenu';
+import {
+  NotificationBell,
+  notifyBrowser,
+  playTickSound,
+} from './components/NotificationBell';
+import { MatchChatPanel } from './components/MatchChatPanel';
+import { DmChatModal } from './components/DmChatModal';
+import { useNotifications } from './hooks/useNotifications';
 import { HomeScreen, QuickCreateMatchOptions } from './components/HomeScreen';
 import {
   STARTING_FEN,
@@ -174,6 +183,8 @@ const AppShell: React.FC<AppShellProps> = ({
 
   // --- Trạng thái ván đấu Multiplayer ---
   const [activeMatch, setActiveMatch] = useState<MatchRecord | null>(null);
+  // Đối tượng chat DM đang mở (UserRecord tối giản từ Sảnh / notification)
+  const [dmTarget, setDmTarget] = useState<UserRecord | null>(null);
   const [isSpectator, setIsSpectator] = useState<boolean>(false);
   const [whiteRating, setWhiteRating] = useState<number | null>(null);
   const [blackRating, setBlackRating] = useState<number | null>(null);
@@ -603,6 +614,74 @@ const AppShell: React.FC<AppShellProps> = ({
     if (!currentUser) return;
     const res = await getMatchApi(matchId);
     hydrateMatchFromServer(res, currentUser, { openReview: true });
+  };
+
+  // ------------------ Thông báo realtime (channel user:{id}) ------------------
+
+  const handleNewNotifications = (items: NotificationItem[]) => {
+    for (const n of items) {
+      const p = n.payload as Record<string, unknown>;
+      const watchingThisMatch =
+        screen === 'match' && !!activeMatch && activeMatch.id === p.match_id;
+      switch (n.kind) {
+        case 'turn': {
+          // Chỉ báo khi tab ẩn HOẶC không đang ngồi ở đúng ván này
+          const playingThisMatch = watchingThisMatch && !isSpectator;
+          if (document.hidden || !playingThisMatch) {
+            pushToast('Đến lượt bạn!', 'info');
+            notifyBrowser('Đến lượt bạn', 'Đối thủ đã đi nước của họ.');
+            playTickSound();
+          }
+          break;
+        }
+        case 'challenge':
+          pushToast(
+            `${String(p.from_display_name ?? 'Có người')} thách đấu bạn — mở chuông thông báo để vào phòng.`,
+            'info'
+          );
+          notifyBrowser(
+            'Thách đấu mới',
+            `${String(p.from_display_name ?? 'Kỳ thủ')} thách đấu bạn.`
+          );
+          break;
+        case 'match_started':
+          pushToast(
+            `${String(p.by_display_name ?? 'Đối thủ')} đã vào phòng — ván bắt đầu!`,
+            'success'
+          );
+          notifyBrowser(
+            'Ván bắt đầu',
+            `${String(p.by_display_name ?? 'Đối thủ')} đã vào phòng.`
+          );
+          break;
+        case 'match_finished':
+          if (!watchingThisMatch) {
+            pushToast('Một ván đấu của bạn đã kết thúc.', 'info');
+          }
+          break;
+        default:
+          // 'dm': badge chuông là đủ — tránh spam toast
+          break;
+      }
+    }
+  };
+
+  const { notifications, unread, markAllRead } = useNotifications(
+    currentUser?.id ?? null,
+    handleNewNotifications
+  );
+
+  const handleOpenNotificationMatch = async (matchId: string) => {
+    await handleOpenLiveMatch(matchId);
+  };
+
+  const handleOpenDm = (userId: string, displayName: string) => {
+    if (!currentUser || userId === currentUser.id) return;
+    setDmTarget({
+      id: userId,
+      username: displayName,
+      display_name: displayName,
+    } as UserRecord);
   };
 
   // ------------------ Effects ------------------
@@ -1710,6 +1789,16 @@ const AppShell: React.FC<AppShellProps> = ({
           {/* Giao diện & chất liệu bàn */}
           <ThemePicker />
 
+          {/* Chuông thông báo realtime */}
+          <NotificationBell
+            currentUser={currentUser}
+            notifications={notifications}
+            unread={unread}
+            onMarkAllRead={markAllRead}
+            onOpenMatch={handleOpenNotificationMatch}
+            onOpenDm={handleOpenDm}
+          />
+
           {/* Menu Tài khoản & Link Admin UI */}
           <UserDropdownMenu
             user={currentUser}
@@ -1738,6 +1827,7 @@ const AppShell: React.FC<AppShellProps> = ({
           onJoinMatchByCodeOrId={handleJoinMatchByCodeOrId}
           onCreateMatch={handleCreateMatchFromLobby}
           onOpenHistoryMatchReview={handleOpenHistoryMatchReview}
+          onOpenDm={(u) => setDmTarget(u)}
           onOpenBoardEditor={() => {
             setEditorBoardMap(fenToBoardMap(currentFen));
             setActiveTab('editor');
@@ -2028,6 +2118,21 @@ const AppShell: React.FC<AppShellProps> = ({
                   onChangeAssistant={setAssistantEngine}
                 />
 
+                {activeMatch && (
+                  <MatchChatPanel
+                    match={activeMatch}
+                    currentUser={currentUser}
+                    canModerate={currentUser.role === 'admin'}
+                    getName={(senderId) => {
+                      if (senderId === activeMatch.white_user_id)
+                        return players.w.name;
+                      if (senderId === activeMatch.black_user_id)
+                        return players.b.name;
+                      return 'Kỳ thủ';
+                    }}
+                  />
+                )}
+
                 <MoveHistory
                   moves={moves}
                   currentPly={currentPly}
@@ -2138,6 +2243,15 @@ const AppShell: React.FC<AppShellProps> = ({
       />
 
       <Toasts toasts={toasts} onDismiss={dismissToast} />
+
+      {/* Modal chat DM (mở từ Sảnh hoặc từ notification) */}
+      {dmTarget && (
+        <DmChatModal
+          target={dmTarget}
+          currentUser={currentUser}
+          onClose={() => setDmTarget(null)}
+        />
+      )}
     </div>
   );
 };

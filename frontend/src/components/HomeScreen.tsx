@@ -20,9 +20,11 @@ import {
   UserCircle2,
   Users,
   X,
+  MessageSquare,
 } from 'lucide-react';
 import { fetchLobbyApi } from '../api';
 import { useRealtime } from '../hooks/useRealtime';
+import { LobbyChat } from './LobbyChat';
 import {
   AnalysisLevel,
   GameModeId,
@@ -68,6 +70,8 @@ interface HomeScreenProps {
   onOpenLiveMatch: (matchId: string) => Promise<void>;
   onOpenHistoryMatchReview: (matchId: string) => Promise<void>;
   onOpenBoardEditor: () => void;
+  /** Mở modal chat DM với user */
+  onOpenDm: (user: UserRecord) => void;
 }
 
 const TIME_PRESETS: Array<{
@@ -142,6 +146,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   onOpenLiveMatch,
   onOpenHistoryMatchReview,
   onOpenBoardEditor,
+  onOpenDm,
 }) => {
   const { boardTheme } = useTheme();
   const [lobby, setLobby] = useState<LobbyResponse | null>(null);
@@ -793,25 +798,42 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                         </button>
 
                         {!isMe && (
-                          <button
-                            type="button"
-                            onClick={() => handleSelectChallengePlayer(p)}
-                            className={`px-2.5 py-1 rounded text-[10px] font-semibold inline-flex items-center gap-1 transition cursor-pointer ${
-                              isTargetChallenged
-                                ? 'bg-accent text-accent-ink'
-                                : 'bg-accent/15 hover:bg-accent text-accent hover:text-accent-ink border border-accent/40'
-                            }`}
-                            title={`Thách đấu trực tiếp ${p.display_name}`}
-                          >
-                            <Swords className="w-3 h-3" />
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => onOpenDm(p)}
+                              className="px-2 py-1 rounded bg-card hover:bg-panel border border-line text-[10px] font-medium text-ink-2 hover:text-ink inline-flex items-center gap-1 transition cursor-pointer"
+                              title={`Nhắn tin riêng ${p.display_name}`}
+                            >
+                              <MessageSquare className="w-3 h-3" />
+                              Nhắn tin
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleSelectChallengePlayer(p)}
+                              className={`px-2.5 py-1 rounded text-[10px] font-semibold inline-flex items-center gap-1 transition cursor-pointer ${
+                                isTargetChallenged
+                                  ? 'bg-accent text-accent-ink'
+                                  : 'bg-accent/15 hover:bg-accent text-accent hover:text-accent-ink border border-accent/40'
+                              }`}
+                              title={`Thách đấu trực tiếp ${p.display_name}`}
+                            >
+                              <Swords className="w-3 h-3" />
                             Thách đấu
                           </button>
+                          </>
                         )}
                       </div>
                     </div>
                   );
                 })}
               </div>
+
+              {/* Chat Sảnh — mọi thành viên, khối dưới danh sách Kỳ thủ */}
+              <LobbyChat
+                currentUser={currentUser}
+                knownUsers={[...playersList, ...(lobby?.bots ?? [])]}
+              />
             </div>
           </div>
         </section>

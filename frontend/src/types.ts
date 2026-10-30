@@ -177,6 +177,32 @@ export interface AssistantEngineConfig {
   elo: number;
 }
 
+/** 1 tin nhắn chat theo channel topic (lobby | match:<id> | dm:<a>:<b>) */
+export interface ChatMessage {
+  id: string;
+  topic: string;
+  sender_id: string;
+  body: string;
+  created_at: string;
+}
+
+/** Kind thông báo cá nhân (channel user:{id}) */
+export type NotificationKind =
+  | 'challenge'
+  | 'match_started'
+  | 'match_finished'
+  | 'turn'
+  | 'dm';
+
+export interface NotificationItem {
+  id: string;
+  user_id: string;
+  kind: NotificationKind;
+  payload: Record<string, unknown>;
+  read_at: string | null;
+  created_at: string;
+}
+
 export interface GameReviewResult {
   initial_fen: string;
   white_accuracy: number;

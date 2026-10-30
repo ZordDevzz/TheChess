@@ -1,6 +1,7 @@
 import {
   AnalysisLevel,
   AnalysisResponse,
+  ChatMessage,
   EngineStatus,
   GameModeId,
   LabMatchListResponse,
@@ -9,6 +10,7 @@ import {
   MatchRecord,
   MatchSummaryItem,
   MatchWithDetailsResponse,
+  NotificationItem,
   ReviewJobStatus,
   SystemStats,
   TimeControlType,
@@ -614,6 +616,80 @@ export async function getLabTournamentApi(id: string): Promise<LabTournament> {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.detail || 'Không tải được giải Lab.');
   }
+  return res.json();
+}
+
+// ---------------------------------------------------------------------------
+// Chat & Notifications
+// ---------------------------------------------------------------------------
+
+export async function fetchChatMessagesApi(
+  topic: string,
+  before?: string,
+  limit = 50
+): Promise<ChatMessage[]> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (before) params.set('before', before);
+  const res = await fetch(
+    `${API_BASE}/chat/${encodeURIComponent(topic)}/messages?${params}`,
+    { headers: authHeaders() }
+  );
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Không tải được tin nhắn.');
+  }
+  const data = (await res.json()) as { messages: ChatMessage[] };
+  return data.messages;
+}
+
+export async function sendChatMessageApi(
+  topic: string,
+  body: string
+): Promise<ChatMessage> {
+  const res = await fetch(
+    `${API_BASE}/chat/${encodeURIComponent(topic)}/messages`,
+    {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ body }),
+    }
+  );
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(detailToMessage(err.detail, 'Không gửi được tin nhắn.'));
+  }
+  return res.json();
+}
+
+export async function deleteChatMessageApi(messageId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/chat/messages/${messageId}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Không xóa được tin nhắn.');
+  }
+}
+
+export async function fetchNotificationsApi(): Promise<{
+  notifications: NotificationItem[];
+  unread: number;
+}> {
+  const res = await fetch(`${API_BASE}/notifications`, { headers: authHeaders() });
+  if (!res.ok) throw new Error('Không tải được thông báo.');
+  return res.json();
+}
+
+export async function markNotificationsReadApi(
+  notificationIds?: string[]
+): Promise<{ marked: number; unread: number }> {
+  const res = await fetch(`${API_BASE}/notifications/read`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({ notification_ids: notificationIds ?? null }),
+  });
+  if (!res.ok) throw new Error('Không cập nhật được trạng thái thông báo.');
   return res.json();
 }
 

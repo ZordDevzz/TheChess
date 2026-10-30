@@ -65,6 +65,11 @@ lab_manager = LabManager(engine_manager, db_manager, _match_ws_broadcast)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Dọn tin chat Sảnh cũ hơn 90 ngày (chat trận + DM giữ vĩnh viễn).
+    try:
+        db_manager.prune_lobby_chat(days=90)
+    except Exception:  # noqa: BLE001 - prune là best-effort, không chặn startup
+        pass
     await lab_manager.start()
     yield
     await lab_manager.shutdown()
@@ -522,7 +527,7 @@ class TopicHub:
 
 
 #: Topic được phép subscribe — chặn topic tùy tiện làm phình bộ nhớ hub.
-_ALLOWED_TOPIC_PREFIXES = ("match:", "review:")
+_ALLOWED_TOPIC_PREFIXES = ("match:", "review:", "dm:", "user:")
 _ALLOWED_TOPICS = {"lobby"}
 
 
@@ -530,6 +535,25 @@ def _topic_allowed(topic: str) -> bool:
     return topic in _ALLOWED_TOPICS or any(
         topic.startswith(p) and len(topic) > len(p) for p in _ALLOWED_TOPIC_PREFIXES
     )
+
+
+def _authorize_topic(topic: str, user: UserRecord) -> bool:
+    """
+    Kiểm tra QUYỀN subscribe/publish theo topic (chống đọc chat/notify của
+    người khác — same-origin policy cho channels):
+    - `user:{id}`: chỉ chính chủ.
+    - `dm:{a}:{b}`: chỉ 2 thành viên của đoạn chat.
+    - `lobby` / `match:*` (public, có cả khán giả) / `review:*`: mọi user đã đăng nhập.
+    """
+    if topic.startswith("user:"):
+        return topic == f"user:{user.id}"
+    if topic.startswith("dm:"):
+        parts = topic.split(":")
+        return len(parts) == 3 and bool(parts[1]) and bool(parts[2]) and user.id in (
+            parts[1],
+            parts[2],
+        )
+    return True
 
 
 topic_hub = TopicHub()
@@ -578,6 +602,93 @@ async def _publish_review_event(job_id: str, payload: Dict[str, Any]) -> None:
         pass
 
 
+# ------------------------------------------------------------------------------
+# Chat & Thông báo — cùng kiến trúc channels phía trên:
+#   chat:    topic 'match:<id>' | 'lobby' | 'dm:<a>:<b>' (id sorted)
+#   notify:  topic 'user:{id}', nguồn truth là bảng notification (HTTP refetch)
+# ------------------------------------------------------------------------------
+
+_CHAT_BODY_MAX = 500
+_CHAT_RATE_LIMIT = 5  # tối đa 5 tin / 10s / user / topic
+_CHAT_RATE_WINDOW = 10.0
+_chat_rate_buckets: Dict[str, List[float]] = {}
+
+
+def _check_chat_rate_limit(user_id: str, topic: str) -> bool:
+    """True nếu được gửi. In-memory (1 process) — đủ cho quy mô CLB."""
+    now = time.monotonic()
+    key = f"{user_id}:{topic}"
+    bucket = [
+        t for t in _chat_rate_buckets.get(key, []) if now - t < _CHAT_RATE_WINDOW
+    ]
+    if len(bucket) >= _CHAT_RATE_LIMIT:
+        _chat_rate_buckets[key] = bucket
+        return False
+    bucket.append(now)
+    _chat_rate_buckets[key] = bucket
+    return True
+
+
+def _validate_chat_topic(topic: str) -> Optional[str]:
+    """Trả về chuỗi lỗi nếu topic chat sai định dạng, None nếu hợp lệ."""
+    if topic == "lobby" or topic.startswith("match:"):
+        return None
+    if topic.startswith("dm:"):
+        parts = topic.split(":")
+        if len(parts) == 3 and parts[1] and parts[2]:
+            return None
+        return "Topic DM sai định dạng (dm:<userA>:<userB>)."
+    return "Topic chat không hợp lệ (lobby | match:<id> | dm:<a>:<b>)."
+
+
+async def _notify_user(
+    user_id: str, kind: str, payload: Optional[Dict[str, Any]] = None
+) -> None:
+    """Ghi notification vào DB (nguồn truth) + push event nhẹ qua topic user:{id}."""
+    if not user_id:
+        return
+    try:
+        # 'turn' chỉ giữ 1 tin chưa đọc mới nhất — nước sau thay thế nước trước.
+        if kind == "turn":
+            db_manager.mark_notifications_read(user_id, kind="turn")
+        db_manager.create_notification(user_id, kind, payload)
+        await topic_hub.publish(
+            f"user:{user_id}",
+            {"topic": f"user:{user_id}", "type": "notification", "kind": kind},
+        )
+    except Exception:  # noqa: BLE001 - notify không được làm hỏng request chính
+        pass
+
+
+async def _notify_match_finished(match_id: str) -> None:
+    """Thông báo kết thúc ván cho cả 2 kỳ thủ (bỏ qua bot)."""
+    match = db_manager.get_match_record(match_id)
+    if not match:
+        return
+    payload = {
+        "match_id": match_id,
+        "result": match.result,
+        "winner_user_id": match.winner_user_id,
+    }
+    for uid in (match.white_user_id, match.black_user_id):
+        u = db_manager.get_user_by_id(uid) if uid else None
+        if u and not u.is_bot:
+            await _notify_user(uid, "match_finished", payload)
+
+
+async def _notify_turn_if_human(match_id: str) -> None:
+    """Sau 1 nước đi: báo người tới lượt (chỉ human) — dùng cho chuông + push browser."""
+    match = db_manager.get_match_record(match_id)
+    if not match or match.status != "playing":
+        return
+    next_uid = match.white_user_id if match.current_turn == "w" else match.black_user_id
+    u = db_manager.get_user_by_id(next_uid) if next_uid else None
+    if u and not u.is_bot:
+        await _notify_user(
+            next_uid, "turn", {"match_id": match_id}
+        )
+
+
 @app.websocket("/api/ws")
 async def ws_app_channel(
     websocket: WebSocket,
@@ -587,10 +698,13 @@ async def ws_app_channel(
     Kênh realtime duy nhất của app (server broadcast + client subscribe).
     Client gửi `?token=<session token>` để xác thực, sau đó giao tiếp:
       - "ping"                                    → {"type":"pong"} (heartbeat)
-      - {"action":"subscribe","topic":"match:x"}  → topic hợp lệ: match:<id> | lobby | review:<id>
+      - {"action":"subscribe","topic":"match:x"}  → topic hợp lệ: match:<id> | lobby |
+                                                    review:<id> | dm:<a>:<b> | user:<id>
+                                                    (dm:/user: được kiểm tra membership)
       - {"action":"unsubscribe","topic":"..."}
-    Server push {"topic":..., "type":"lobby_updated" | "match_updated" | ..., ...};
-    client nhận event thì refetch REST tương ứng (notify + refetch).
+    Server push {"topic":..., "type":"lobby_updated" | "match_updated" | "chat" |
+                 "notification" | ...}; client nhận event thì refetch REST tương ứng
+    (notify + refetch).
     """
     if not token:
         await websocket.close(code=4401)
@@ -617,6 +731,11 @@ async def ws_app_channel(
                     )
                     continue
                 if action == "subscribe":
+                    if not _authorize_topic(topic, user):
+                        await websocket.send_json(
+                            {"type": "error", "detail": f"Không có quyền subscribe topic: {topic}"}
+                        )
+                        continue
                     topic_hub.subscribe(topic, websocket)
                     await websocket.send_json({"type": "subscribed", "topic": topic})
                 elif action == "unsubscribe":
@@ -890,6 +1009,25 @@ async def create_match_endpoint(
         details = db_manager.get_match_with_details(created.id)
         assert details is not None
         await _publish_lobby_event(reason="match_created")
+        # Thách đấu: tạo phòng online có đối thủ là người thật -> notify toast-like
+        other_id = (
+            created.black_user_id
+            if created.white_user_id == user.id
+            else created.white_user_id
+        )
+        if created.mode == "online" and other_id and other_id != user.id:
+            other = db_manager.get_user_by_id(other_id)
+            if other and not other.is_bot:
+                await _notify_user(
+                    other_id,
+                    "challenge",
+                    {
+                        "match_id": created.id,
+                        "room_code": created.room_code,
+                        "from_user_id": user.id,
+                        "from_display_name": user.display_name,
+                    },
+                )
         return details
     except (KeyError, ValueError, PermissionError) as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -905,6 +1043,24 @@ async def join_match_endpoint(
         details = db_manager.get_match_with_details(joined.id)
         assert details is not None
         await _broadcast_match_event(joined.id, "match_updated")
+        # Người tạo phòng được báo: đối thủ đã vào, ván bắt đầu
+        creator_id = (
+            joined.white_user_id
+            if joined.black_user_id == user.id
+            else joined.black_user_id
+        )
+        if creator_id and creator_id != user.id:
+            creator = db_manager.get_user_by_id(creator_id)
+            if creator and not creator.is_bot:
+                await _notify_user(
+                    creator_id,
+                    "match_started",
+                    {
+                        "match_id": joined.id,
+                        "by_user_id": user.id,
+                        "by_display_name": user.display_name,
+                    },
+                )
         return details
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -1023,6 +1179,9 @@ async def append_match_move_endpoint(
                     else "draw"
                 )
                 db_manager.complete_match(match_id, result=res, termination=term)
+                await _notify_match_finished(match_id)
+        else:
+            await _notify_turn_if_human(match_id)
         details = db_manager.get_match_with_details(match_id)
         assert details is not None
         await _broadcast_match_event(match_id, "match_updated")
@@ -1065,6 +1224,7 @@ async def finish_match_endpoint(
     _require_match_participant(match_id, user)
     try:
         db_manager.complete_match(match_id, result=req.result, termination=req.termination)
+        await _notify_match_finished(match_id)
         details = db_manager.get_match_with_details(match_id)
         assert details is not None
         await _broadcast_match_event(match_id, "match_finished")
@@ -1091,6 +1251,144 @@ async def save_match_review_endpoint(
         )
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+# ------------------------------------------------------------------------------
+# CHAT & NOTIFICATIONS API
+# ------------------------------------------------------------------------------
+
+
+class ChatMessageRequest(BaseModel):
+    body: str = Field(min_length=1, max_length=_CHAT_BODY_MAX)
+
+
+class MarkNotificationsReadRequest(BaseModel):
+    notification_ids: Optional[List[str]] = None
+
+
+def _authorize_chat_access(topic: str, user: UserRecord) -> None:
+    """Kiểm tra quyền đọc/gửi chat theo topic (tương tự _authorize_topic cho WS)."""
+    err = _validate_chat_topic(topic)
+    if err:
+        raise HTTPException(status_code=400, detail=err)
+    if topic.startswith("dm:"):
+        if not _authorize_topic(topic, user):
+            raise HTTPException(status_code=403, detail="Bạn không thuộc đoạn chat này.")
+    elif topic.startswith("match:"):
+        match = db_manager.get_match_record(topic[len("match:"):])
+        if not match:
+            raise HTTPException(status_code=404, detail="Không tìm thấy trận đấu.")
+
+
+@app.get("/api/chat/{topic}/messages")
+async def list_chat_messages_endpoint(
+    topic: str,
+    before: Optional[str] = None,
+    limit: int = 50,
+    user: UserRecord = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Lịch sử chat theo topic (trang cuối, cursor `before` để tải thêm tin cũ)."""
+    _authorize_chat_access(topic, user)
+    limit = max(1, min(limit, 100))
+    return {
+        "topic": topic,
+        "messages": db_manager.list_chat_messages(topic, before=before, limit=limit),
+    }
+
+
+@app.post("/api/chat/{topic}/messages")
+async def send_chat_message_endpoint(
+    topic: str,
+    req: ChatMessageRequest,
+    user: UserRecord = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """
+    Gửi tin chat. Chat trận được GIỮ LẠI sau khi ván kết thúc nhưng KHÓA gửi;
+    chat DM gửi được mọi lúc. Rate limit 5 tin/10s/user/topic.
+    """
+    _authorize_chat_access(topic, user)
+    if topic.startswith("match:"):
+        match = db_manager.get_match_record(topic[len("match:"):])
+        if match and match.status in ("finished", "aborted"):
+            raise HTTPException(
+                status_code=403,
+                detail="Ván đấu đã kết thúc — kênh chat bị khóa (chỉ xem lại).",
+            )
+    body = req.body.strip()
+    if not body:
+        raise HTTPException(status_code=400, detail="Tin nhắn trống.")
+    if not _check_chat_rate_limit(user.id, topic):
+        raise HTTPException(
+            status_code=429, detail="Gửi quá nhanh — tối đa 5 tin / 10 giây."
+        )
+    msg = db_manager.create_chat_message(topic, user.id, body)
+    sender = db_manager.get_user_by_id(user.id)
+    await topic_hub.publish(
+        topic,
+        {
+            "topic": topic,
+            "type": "chat",
+            "message_id": msg["id"],
+            "sender_id": user.id,
+            "sender_name": sender.display_name if sender else user.username,
+            "body": body,
+            "created_at": msg["created_at"],
+        },
+    )
+    # DM tới người offline: kèm notification để có badge chuông khi đăng nhập lại
+    if topic.startswith("dm:"):
+        parts = topic.split(":")
+        for uid in (parts[1], parts[2]):
+            if uid != user.id:
+                await _notify_user(
+                    uid,
+                    "dm",
+                    {
+                        "topic": topic,
+                        "from_user_id": user.id,
+                        "from_display_name": sender.display_name if sender else user.username,
+                        "preview": body[:80],
+                    },
+                )
+    return msg
+
+
+@app.delete("/api/chat/messages/{message_id}", status_code=204)
+async def delete_chat_message_endpoint(
+    message_id: str,
+    admin: UserRecord = Depends(get_current_admin),
+) -> None:
+    """Admin xóa 1 tin chat (mọi kênh) — broadcast `chat_deleted` để client dọn UI."""
+    deleted = db_manager.delete_chat_message(message_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Không tìm thấy tin nhắn.")
+    await topic_hub.publish(
+        deleted["topic"],
+        {"topic": deleted["topic"], "type": "chat_deleted", "message_id": message_id},
+    )
+
+
+@app.get("/api/notifications")
+async def list_notifications_endpoint(
+    user: UserRecord = Depends(get_current_user),
+) -> Dict[str, Any]:
+    return {
+        "notifications": db_manager.list_notifications(user.id),
+        "unread": db_manager.count_unread_notifications(user.id),
+    }
+
+
+@app.post("/api/notifications/read")
+async def mark_notifications_read_endpoint(
+    req: MarkNotificationsReadRequest,
+    user: UserRecord = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Đánh dấu đã đọc: truyền `notification_ids` cụ thể, hoặc bỏ trống = tất cả."""
+    marked = db_manager.mark_notifications_read(user.id, req.notification_ids)
+    return {
+        "marked": marked,
+        "unread": db_manager.count_unread_notifications(user.id),
+    }
 
 
 # ------------------------------------------------------------------------------
@@ -1225,6 +1523,7 @@ async def admin_abort_match(
 ) -> MatchRecord:
     try:
         aborted = db_manager.abort_match_by_admin(admin.id, match_id)
+        await _notify_match_finished(match_id)
         await _broadcast_match_event(match_id, "match_finished")
         await _publish_lobby_event(reason="match_aborted")
         return aborted
