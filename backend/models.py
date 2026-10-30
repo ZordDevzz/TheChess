@@ -39,6 +39,7 @@ class UserRecord(BaseModel):
     is_active: bool = True
     must_change_password: bool = True
     token_version: int = 1
+    quick_link_epoch: int = 1
     created_by_id: Optional[str] = None
 
     # Phân biệt tài khoản Bot AI (Maia / Stockfish) và người thật

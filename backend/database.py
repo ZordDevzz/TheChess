@@ -111,6 +111,7 @@ CREATE TABLE IF NOT EXISTS "user" (
     is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
     must_change_password INTEGER NOT NULL DEFAULT 1 CHECK (must_change_password IN (0, 1)),
     token_version INTEGER NOT NULL DEFAULT 1,
+    quick_link_epoch INTEGER NOT NULL DEFAULT 1,
     created_by_id TEXT REFERENCES "user"(id) ON DELETE SET NULL,
 
     is_bot INTEGER NOT NULL DEFAULT 0 CHECK (is_bot IN (0, 1)),
@@ -355,12 +356,15 @@ def create_session_token(user: UserRecord, ttl_seconds: int = 30 * 86400) -> str
 def create_quick_login_token(user: UserRecord, ttl_seconds: int = 14 * 86400) -> str:
     """
     Tạo Quick-Link token đăng nhập 1 chạm siêu ngắn (19 ký tự base64url) do Admin cấp:
-    [4B uid_tag][1B token_version][4B exp_timestamp][5B HMAC-SHA256] = 14 bytes -> 19 chars.
+    [4B uid_tag][1B quick_link_epoch][4B exp_timestamp][5B HMAC-SHA256] = 14 bytes -> 19 chars.
+
+    Dùng `quick_link_epoch` (tách riêng khỏi `token_version`) để link KHÔNG chết
+    khi user tự đổi mật khẩu — chỉ Admin thu hồi/reset mới làm chết link.
     """
     uid_tag = hashlib.sha256(user.id.encode("utf-8")).digest()[:4]
-    tv_byte = (int(user.token_version) & 0xFF).to_bytes(1, "big")
+    ql_epoch_byte = (int(user.quick_link_epoch) & 0xFF).to_bytes(1, "big")
     exp_bytes = int(time.time() + ttl_seconds).to_bytes(4, "big", signed=True)
-    header = uid_tag + tv_byte + exp_bytes
+    header = uid_tag + ql_epoch_byte + exp_bytes
     sig = hmac.new(
         SECRET_KEY.encode("utf-8"),
         b"ql:" + user.id.encode("utf-8") + header,
@@ -484,6 +488,18 @@ class DatabaseManager:
         """Thực thi DDL khởi tạo 3 bảng `user`, `match`, `match_detail` và các chỉ mục."""
         with self.connection() as conn:
             conn.executescript(SCHEMA_DDL)
+            self._migrate_schema(conn)
+
+    @staticmethod
+    def _migrate_schema(conn: sqlite3.Connection) -> None:
+        """Migrate nhẹ cho DB đã có: thêm cột mới (CREATE TABLE IF NOT EXISTS không thêm cột)."""
+        user_cols = {
+            r["name"] for r in conn.execute('PRAGMA table_info("user")').fetchall()
+        }
+        if "quick_link_epoch" not in user_cols:
+            conn.execute(
+                'ALTER TABLE "user" ADD COLUMN quick_link_epoch INTEGER NOT NULL DEFAULT 1'
+            )
 
     def seed_defaults(self) -> None:
         """
@@ -592,6 +608,7 @@ class DatabaseManager:
             is_active=bool(row["is_active"]),
             must_change_password=bool(row["must_change_password"]),
             token_version=row["token_version"],
+            quick_link_epoch=row["quick_link_epoch"],
             created_by_id=row["created_by_id"],
             is_bot=bool(row["is_bot"]),
             bot_engine=row["bot_engine"],
@@ -819,12 +836,12 @@ class DatabaseManager:
 
             if deactivate:
                 conn.execute(
-                    'UPDATE "user" SET token_version = token_version + 1, is_active = 0, updated_at = ? WHERE id = ?',
+                    'UPDATE "user" SET token_version = token_version + 1, quick_link_epoch = quick_link_epoch + 1, is_active = 0, updated_at = ? WHERE id = ?',
                     (now, target_user_id),
                 )
             else:
                 conn.execute(
-                    'UPDATE "user" SET token_version = token_version + 1, updated_at = ? WHERE id = ?',
+                    'UPDATE "user" SET token_version = token_version + 1, quick_link_epoch = quick_link_epoch + 1, updated_at = ? WHERE id = ?',
                     (now, target_user_id),
                 )
             row = conn.execute(
@@ -1549,7 +1566,7 @@ class DatabaseManager:
                 if len(raw) != 14:
                     return None
                 uid_tag = raw[:4]
-                tv = raw[4]
+                ql_epoch = raw[4]
                 exp = int.from_bytes(raw[5:9], "big", signed=True)
                 sig = raw[9:14]
                 if time.time() > float(exp):
@@ -1565,7 +1582,7 @@ class DatabaseManager:
                     row_tag = hashlib.sha256(row["id"].encode("utf-8")).digest()[:4]
                     if row_tag != uid_tag:
                         continue
-                    if (int(row["token_version"]) & 0xFF) != tv:
+                    if (int(row["quick_link_epoch"]) & 0xFF) != ql_epoch:
                         continue
                     expected_sig = hmac.new(
                         SECRET_KEY.encode("utf-8"),
@@ -1702,6 +1719,7 @@ class DatabaseManager:
                 else (1 if req.new_password else row["must_change_password"])
             )
             bump_tv = 1 if (req.new_password or req.is_active is False) else 0
+            bump_ql = bump_tv  # reset mật khẩu / khóa tài khoản cũng làm chết quick link
 
             conn.execute(
                 """
@@ -1716,6 +1734,7 @@ class DatabaseManager:
                     password_hash = ?,
                     must_change_password = ?,
                     token_version = token_version + ?,
+                    quick_link_epoch = quick_link_epoch + ?,
                     updated_at = ?
                 WHERE id = ?
                 """,
@@ -1730,6 +1749,7 @@ class DatabaseManager:
                     pw_hash,
                     must_change,
                     bump_tv,
+                    bump_ql,
                     now,
                     target_user_id,
                 ),

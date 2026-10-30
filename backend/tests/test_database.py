@@ -322,13 +322,20 @@ def test_quick_login_token_waiting_room_join_and_exhibition_stream(
     assert verified_a is not None
     assert verified_a.id == user_a.id
 
-    # Khi đổi mật khẩu mới -> token_version tăng -> quick_login cũ bị vô hiệu hóa
+    # User tự đổi mật khẩu -> session token cũ chết, nhưng quick link CÒN SỐNG
+    # (quick_link_epoch tách riêng token_version — chỉ Admin thu hồi/reset mới giết link)
     updated_a = db.change_own_password(user_a.id, "new_khoa_pass_99", "Khoa Trần")
     assert updated_a.must_change_password is False
     assert updated_a.display_name == "Khoa Trần"
+    assert db.verify_token_and_get_user(q_token, expected_purpose="quick_login") is not None
+
+    # Admin thu hồi -> quick link chết
+    db.revoke_user_sessions(admin.id, user_a.id)
     assert db.verify_token_and_get_user(q_token, expected_purpose="quick_login") is None
 
-    s_token = create_session_token(updated_a)
+    fresh_a = db.get_user_by_id(user_a.id)
+    assert fresh_a is not None
+    s_token = create_session_token(fresh_a)
     assert db.verify_token_and_get_user(s_token, expected_purpose="session") is not None
 
     # Tạo phòng chờ (waiting) và người thứ 2 vào qua room_code

@@ -499,3 +499,89 @@ def test_vs_ai_cannot_proxy_for_non_participant_bot(client, players):
         client, alice["headers"], created["match"]["id"], outsider["id"], "e2e4"
     )
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Quick-Link lifecycle: link phải sống đủ 14 ngày trừ khi Admin thu hồi/reset
+# ---------------------------------------------------------------------------
+
+
+def _make_quick_link(client, admin, user_id: str) -> str:
+    resp = client.post(
+        f"/api/admin/users/{user_id}/quick-link", headers=admin["headers"]
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json()["quick_login_token"]
+
+
+def test_quick_link_survives_own_password_change(client, admin):
+    """Bug cũ: đổi mật khẩu (bắt buộc lần đăng nhập đầu) giết luôn quick link."""
+    resp = client.post(
+        "/api/admin/users",
+        json={
+            "username": "quinn",
+            "password": "quinn-pass-123",
+            "display_name": "Quinn",
+        },
+        headers=admin["headers"],
+    )
+    assert resp.status_code == 200, resp.text
+    uid = resp.json()["user"]["id"]
+
+    ql = _make_quick_link(client, admin, uid)
+    r1 = client.post("/api/auth/quick-login", json={"login_token": ql})
+    assert r1.status_code == 200, r1.text
+    session_headers = {"Authorization": f"Bearer {r1.json()['token']}"}
+
+    # Luồng bắt buộc đổi mật khẩu ở lần đăng nhập đầu
+    r2 = client.post(
+        "/api/auth/change-password",
+        headers=session_headers,
+        json={"new_password": "quinn-new-pass-456"},
+    )
+    assert r2.status_code == 200, r2.text
+
+    # Link cũ PHẢI còn dùng được sau khi user tự đổi mật khẩu
+    r3 = client.post("/api/auth/quick-login", json={"login_token": ql})
+    assert r3.status_code == 200, r3.text
+
+
+def test_quick_link_revoked_by_admin_revoke(client, admin, players):
+    alice = players["alice"]
+    ql = _make_quick_link(client, admin, alice["id"])
+    assert (
+        client.post("/api/auth/quick-login", json={"login_token": ql}).status_code
+        == 200
+    )
+    resp = client.post(
+        f"/api/admin/users/{alice['id']}/revoke", headers=admin["headers"]
+    )
+    assert resp.status_code == 200, resp.text
+    again = client.post("/api/auth/quick-login", json={"login_token": ql})
+    assert again.status_code == 401
+
+
+def test_quick_link_revoked_by_admin_password_reset(client, admin):
+    resp = client.post(
+        "/api/admin/users",
+        json={
+            "username": "rita",
+            "password": "rita-pass-123",
+            "display_name": "Rita",
+        },
+        headers=admin["headers"],
+    )
+    uid = resp.json()["user"]["id"]
+    ql = _make_quick_link(client, admin, uid)
+    assert (
+        client.post("/api/auth/quick-login", json={"login_token": ql}).status_code
+        == 200
+    )
+    reset = client.patch(
+        f"/api/admin/users/{uid}",
+        json={"new_password": "rita-reset-789"},
+        headers=admin["headers"],
+    )
+    assert reset.status_code == 200, reset.text
+    again = client.post("/api/auth/quick-login", json={"login_token": ql})
+    assert again.status_code == 401
