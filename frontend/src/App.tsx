@@ -1215,60 +1215,64 @@ const AppShell: React.FC<AppShellProps> = ({
   };
 
   const handleRematch = async () => {
-    // Ván vừa kết thúc thuộc DB và đối thủ là bot (vs_ai / training-vs-bot):
-    // tạo record rematch trên server (đổi màu) để có lịch sử, Elo & review —
-    // trước đây rematch thuần local nên CSDL không có biên bản ván này.
-    if (activeMatch && !isSpectator && currentUser && config.opponent === 'ai') {
-      try {
-        const res = await createMatchApi({
-          mode: activeMatch.mode,
-          status: 'playing',
-          is_rated: activeMatch.is_rated,
-          white_user_id: activeMatch.black_user_id ?? currentUser.id,
-          black_user_id: activeMatch.white_user_id ?? currentUser.id,
-          ai_elo_override: activeMatch.ai_elo_override,
-          analysis_level: activeMatch.analysis_level,
-          allow_takeback: activeMatch.allow_takeback,
-          allow_hints: activeMatch.allow_hints,
-          time_control_type: activeMatch.time_control_type,
-          initial_time_ms: activeMatch.initial_time_ms,
-          increment_ms: activeMatch.increment_ms,
-          preset_id: activeMatch.preset_id,
-          initial_fen: activeMatch.initial_fen || STARTING_FEN,
-          generate_room_code: false,
-        });
-        hydrateMatchFromServer(res, currentUser);
-        // Màu mới của mình = ngược màu cũ (server đã hoán đổi 2 bên)
-        const myNewColor =
-          activeMatch.white_user_id === currentUser.id ? 'b' : 'w';
+    // Mọi ván đều phải lưu trên máy chủ: rematch LUÔN tạo record mới với hai
+    // bên hoán đổi màu. Không còn path local — lỗi thì báo và giữ màn hình
+    // kết thúc (không chơi ván không có biên bản CSDL).
+    if (!currentUser) return;
+    if (!activeMatch) {
+      pushToast(
+        'Không tìm thấy biên bản ván vừa kết thúc — không rematch được.',
+        'error'
+      );
+      return;
+    }
+    try {
+      // Trận online: đối thủ là người thật — tạo phòng chờ + mã phòng để họ
+      // vào lại. Trận vs bot: chơi ngay.
+      const isOnlineHuman =
+        activeMatch.mode === 'online' &&
+        activeMatch.white_user_id !== activeMatch.black_user_id;
+      const res = await createMatchApi({
+        mode: activeMatch.mode,
+        status: isOnlineHuman ? 'waiting' : 'playing',
+        is_rated: activeMatch.is_rated,
+        white_user_id: activeMatch.black_user_id ?? currentUser.id,
+        black_user_id: activeMatch.white_user_id ?? currentUser.id,
+        ai_elo_override: activeMatch.ai_elo_override,
+        analysis_level: activeMatch.analysis_level,
+        allow_takeback: activeMatch.allow_takeback,
+        allow_hints: activeMatch.allow_hints,
+        time_control_type: activeMatch.time_control_type,
+        initial_time_ms: activeMatch.initial_time_ms,
+        increment_ms: activeMatch.increment_ms,
+        preset_id: activeMatch.preset_id,
+        initial_fen: activeMatch.initial_fen || STARTING_FEN,
+        generate_room_code: isOnlineHuman,
+      });
+      hydrateMatchFromServer(res, currentUser);
+      if (isOnlineHuman) {
         pushToast(
-          `Rematch — đổi màu sang ${myNewColor === 'w' ? 'Trắng' : 'Đen'}!`,
-          'success'
+          `Đã tạo phòng rematch #${res.match.room_code}. Chia sẻ mã này cho đối thủ!`,
+          'info'
         );
         return;
-      } catch (e) {
-        // Tạo rematch trên DB lỗi -> quay về path local để người chơi không bị kẹt
-        console.error('Lỗi tạo rematch:', e);
-        pushToast(
-          'Không tạo được rematch trên máy chủ — chơi ván offline.',
-          'error'
-        );
       }
+      // Màu mới của mình = ngược màu cũ (server đã hoán đổi 2 bên)
+      const myNewColor =
+        activeMatch.white_user_id === currentUser.id ? 'b' : 'w';
+      pushToast(
+        `Rematch — đổi màu sang ${myNewColor === 'w' ? 'Trắng' : 'Đen'}!`,
+        'success'
+      );
+    } catch (e) {
+      console.error('Lỗi tạo rematch:', e);
+      pushToast(
+        e instanceof Error
+          ? `Không tạo được rematch: ${e.message}`
+          : 'Không tạo được rematch trên máy chủ.',
+        'error'
+      );
     }
-
-    const nextColor = playerColor === 'w' ? 'b' : 'w';
-    handleChangePlayerColor(nextColor);
-    setActiveMatch(null);
-    setIsSpectator(false);
-    setMoves([]);
-    setCurrentPly(0);
-    resetReview();
-    setReviewMode(false);
-    setGameOver(null);
-    setSelectedSquare(null);
-    setPendingPromo(null);
-    setShowGameOver(false);
-    setPhase('playing');
   };
 
   const handleResign = () => {

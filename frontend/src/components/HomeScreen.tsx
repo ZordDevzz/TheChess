@@ -215,7 +215,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   };
 
   // State cho Lịch sử đấu (Cột phải dưới)
-  const [historyTab, setHistoryTab] = useState<'mine' | 'club'>('mine');
+  const [historyTab, setHistoryTab] = useState<'mine' | 'club' | 'ai'>('mine');
 
   const loadLobby = async (stepExhibition = true) => {
     try {
@@ -333,7 +333,9 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   const historyList =
     historyTab === 'mine'
       ? lobby?.my_history || []
-      : lobby?.club_history || [];
+      : historyTab === 'club'
+      ? lobby?.club_history || []
+      : lobby?.ai_history || [];
 
   return (
     <div className="flex-1 min-h-0 w-full overflow-y-auto lg:overflow-hidden p-3.5 md:p-4">
@@ -1292,6 +1294,17 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                   }`}
                 >
                   Toàn sảnh
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setHistoryTab('ai')}
+                  className={`px-2 py-0.5 rounded-xs transition cursor-pointer ${
+                    historyTab === 'ai'
+                      ? 'bg-accent text-accent-ink font-semibold'
+                      : 'text-ink-2 hover:text-ink'
+                  }`}
+                >
+                  AI vs AI
                 </button>
               </div>
             </div>

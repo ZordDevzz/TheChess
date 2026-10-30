@@ -361,6 +361,8 @@ export interface LobbyResponse {
   featured_match?: MatchSummaryItem | null;
   my_history: MatchSummaryItem[];
   club_history: MatchSummaryItem[];
+  /** Lịch sử các ván AI (cả hai bên bot: vs_ai bot-vs-bot + Lab) */
+  ai_history: MatchSummaryItem[];
   online_players: UserRecord[];
   bots: UserRecord[];
   stats: SystemStats;

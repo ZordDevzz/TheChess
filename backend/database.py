@@ -1880,9 +1880,14 @@ class DatabaseManager:
         self,
         statuses: Sequence[str],
         user_id: Optional[str] = None,
+        both_bots: bool = False,
         limit: int = 30,
     ) -> List[MatchSummaryItem]:
-        """Lấy danh sách tóm tắt ván đấu kèm thông tin `white_player` và `black_player`."""
+        """Lấy danh sách tóm tắt ván đấu kèm thông tin `white_player` và `black_player`.
+
+        `both_bots=True`: chỉ lấy ván cả hai bên đều là bot (vs_ai bot-vs-bot,
+        trận Lab/exhibition) — phục vụ filter lịch sử AI.
+        """
         if not statuses:
             return []
         placeholders = ",".join("?" for _ in statuses)
@@ -1891,6 +1896,8 @@ class DatabaseManager:
         if user_id:
             where_clause += " AND (m.white_user_id = ? OR m.black_user_id = ?)"
             params.extend([user_id, user_id])
+        if both_bots:
+            where_clause += " AND w.is_bot = 1 AND b.is_bot = 1"
         params.append(limit)
 
         # P1-2: JOIN 1 lần lấy cả 2 kỳ thủ thay vì N+1 query từng user.

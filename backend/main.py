@@ -768,6 +768,7 @@ async def get_lobby(
     - `featured_match`: Trận tiêu điểm đang stream trực tiếp (ưu tiên trận của người chơi;
       nếu không có trận nào của người chơi đang diễn ra thì tự động tạo/đi tiếp trận AI vs AI gần Elo người xem).
     - `my_history`: Lịch sử các ván đã kết thúc của người dùng hiện tại.
+    - `ai_history`: Lịch sử các ván AI (cả hai bên bot) đã kết thúc.
     - `club_history`: Lịch sử các ván đã kết thúc của toàn câu lạc bộ.
     - `bots`: Danh sách các tài khoản Bot AI để tạo trận.
     - `stats`: Chỉ số tổng quan của hệ thống.
@@ -801,6 +802,10 @@ async def get_lobby(
     # Lịch sử toàn sảnh (ưu tiên các trận có ít nhất 1 người thật)
     all_finished = db_manager.list_match_summaries(statuses=["finished"], limit=40)
     club_history = [m for m in all_finished if not m.is_system_exhibition][:25]
+    # Lịch sử riêng cho các ván AI (cả hai bên bot: vs_ai bot-vs-bot + Lab)
+    ai_history = db_manager.list_match_summaries(
+        statuses=["finished"], both_bots=True, limit=25
+    )
 
     all_users = db_manager.list_users(include_bots=True)
     bots = [u for u in all_users if u.is_bot]
@@ -819,6 +824,7 @@ async def get_lobby(
         "live_matches": live,
         "featured_match": featured,
         "my_history": my_history,
+        "ai_history": ai_history,
         "club_history": club_history,
         "online_players": human_players,
         "bots": bots,
