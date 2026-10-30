@@ -18,3 +18,4 @@ engines/weights/
 # Misc
 *.log
 .DS_Store
+backend/data/*.db*

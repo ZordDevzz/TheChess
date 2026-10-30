@@ -7,6 +7,7 @@ import {
   PVLine,
 } from '../types';
 import { ANALYSIS_LEVEL_LABELS } from '../gameUtils';
+import { PV_RANK_COLORS } from '../theme/semantic';
 import {
   Eye,
   EyeOff,
@@ -42,13 +43,11 @@ interface EnginePanelProps {
 }
 
 // Màu định hướng đồng bộ giữa danh sách MultiPV và mũi tên trên bàn cờ
-export const PV_RANK_STYLES = [
-  { dot: '#10b981', label: 'Top 1', border: 'rgba(16, 185, 129, 0.35)' },
-  { dot: '#38bdf8', label: 'Top 2', border: 'rgba(56, 189, 248, 0.25)' },
-  { dot: '#f59e0b', label: 'Top 3', border: 'rgba(245, 158, 11, 0.25)' },
-  { dot: '#a855f7', label: 'Top 4', border: 'rgba(168, 85, 247, 0.2)' },
-  { dot: '#ec4899', label: 'Top 5', border: 'rgba(236, 72, 153, 0.2)' },
-];
+export const PV_RANK_STYLES = PV_RANK_COLORS.map((dot, i) => ({
+  dot,
+  label: `Top ${i + 1}`,
+  border: i === 0 ? 'rgba(16, 185, 129, 0.35)' : 'var(--c-line)',
+}));
 
 const formatLineScore = (line: PVLine) => {
   if (line.mate !== null && line.mate !== undefined) {
@@ -70,12 +69,12 @@ const getScoreBadgeClass = (line: PVLine) => {
   }
   const cp = line.cp ?? 0;
   if (cp >= 30) {
-    return 'bg-zinc-100 text-zinc-950 border-zinc-200 font-semibold';
+    return 'bg-accent text-accent-ink border-line-strong font-semibold';
   }
   if (cp <= -30) {
-    return 'bg-zinc-800 text-zinc-200 border-zinc-700 font-semibold';
+    return 'bg-card text-ink border-line-strong font-semibold';
   }
-  return 'bg-zinc-900 text-zinc-300 border-zinc-700/80';
+  return 'bg-inset text-ink-2 border-line-strong';
 };
 
 export const EnginePanel: React.FC<EnginePanelProps> = ({
@@ -106,15 +105,15 @@ export const EnginePanel: React.FC<EnginePanelProps> = ({
   const analysisLocked = phase === 'playing' && !visibility.evalBar;
 
   return (
-    <div className="shrink-0 border-b border-zinc-800/80 bg-[#111114] p-3.5 space-y-3 relative">
+    <div className="shrink-0 border-b border-line bg-panel p-3.5 space-y-3 relative">
       {/* Dòng 1: chế độ hiện tại + hành động ván đấu */}
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
-          <span className="px-2 py-0.5 rounded bg-zinc-800 border border-zinc-700 text-xs font-medium text-zinc-100 shrink-0">
+          <span className="px-2 py-0.5 rounded bg-card border border-line-strong text-xs font-medium text-ink shrink-0">
             {modeLabel}
           </span>
           {phase === 'playing' && (
-            <span className="text-xs text-zinc-400 truncate">
+            <span className="text-xs text-ink-2 truncate">
               Phân tích: {ANALYSIS_LEVEL_LABELS[config.analysis].label}
             </span>
           )}
@@ -124,7 +123,7 @@ export const EnginePanel: React.FC<EnginePanelProps> = ({
           {canHint && (
             <button
               onClick={onHint}
-              className="px-2 py-1 rounded-md bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-xs text-amber-300 flex items-center gap-1 transition cursor-pointer"
+              className="px-2 py-1 rounded-md bg-inset hover:bg-card border border-line text-xs text-amber-300 flex items-center gap-1 transition cursor-pointer"
               title="Gợi ý nước đi tốt nhất"
             >
               <Lightbulb className="w-3 h-3" />
@@ -135,7 +134,7 @@ export const EnginePanel: React.FC<EnginePanelProps> = ({
             <button
               onClick={onTriggerAiMoveNow}
               disabled={isAiThinking}
-              className="px-2 py-1 rounded-md bg-zinc-900 hover:bg-zinc-800 disabled:opacity-40 border border-zinc-800 text-xs text-zinc-300 transition cursor-pointer"
+              className="px-2 py-1 rounded-md bg-inset hover:bg-card disabled:opacity-40 border border-line text-xs text-ink-2 transition cursor-pointer"
               title="Yêu cầu AI đi nước tiếp theo"
             >
               {isAiThinking ? '...' : 'AI đi'}
@@ -144,7 +143,7 @@ export const EnginePanel: React.FC<EnginePanelProps> = ({
           {phase === 'playing' && (
             <button
               onClick={onResign}
-              className="p-1.5 rounded-md bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-rose-400 transition cursor-pointer"
+              className="p-1.5 rounded-md bg-inset hover:bg-card border border-line text-rose-400 transition cursor-pointer"
               title="Đầu hàng"
             >
               <Flag className="w-3 h-3" />
@@ -152,7 +151,7 @@ export const EnginePanel: React.FC<EnginePanelProps> = ({
           )}
           <button
             onClick={onOpenConfig}
-            className="p-1.5 rounded-md bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-300 transition cursor-pointer"
+            className="p-1.5 rounded-md bg-inset hover:bg-card border border-line text-ink-2 transition cursor-pointer"
             title="Cấu hình ván đấu / ván mới"
           >
             <Settings className="w-3 h-3" />
@@ -162,7 +161,7 @@ export const EnginePanel: React.FC<EnginePanelProps> = ({
 
       {/* Đang thi đấu với phân tích tắt */}
       {analysisLocked ? (
-        <div className="bg-zinc-950/80 border border-zinc-800/80 rounded-md px-3 py-2.5 text-xs text-zinc-400 leading-relaxed">
+        <div className="bg-inset border border-line rounded-md px-3 py-2.5 text-xs text-ink-2 leading-relaxed">
           🔒 Phân tích đã tắt theo cấu hình chế độ chơi — không có thông tin
           engine nào hiện ra trong lúc thi đấu. Mọi công cụ sẽ mở lại khi ván
           kết thúc hoặc khi bạn đổi cấu hình.
@@ -172,9 +171,9 @@ export const EnginePanel: React.FC<EnginePanelProps> = ({
           {/* Dòng 2: Tiêu đề Phân tích & Tùy chọn hiển thị */}
           <div className="space-y-1.5">
             <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 text-xs text-zinc-400">
-                <span className="font-medium text-zinc-200">Phân tích nhánh</span>
-                <span className="font-mono text-zinc-400">
+              <div className="flex items-center gap-2 text-xs text-ink-2">
+                <span className="font-medium text-ink">Phân tích nhánh</span>
+                <span className="font-mono text-ink-2">
                   d={depth} · {multipv} PV
                 </span>
                 {isAnalyzing && (
@@ -188,8 +187,8 @@ export const EnginePanel: React.FC<EnginePanelProps> = ({
                     onClick={onToggleEval}
                     className={`px-2 py-0.5 rounded text-xs border flex items-center gap-1 transition cursor-pointer ${
                       showEval
-                        ? 'bg-zinc-800 border-zinc-700 text-zinc-200'
-                        : 'bg-transparent border-zinc-800/80 text-zinc-400 hover:text-zinc-400'
+                        ? 'bg-card border-line-strong text-ink'
+                        : 'bg-transparent border-line text-ink-2 hover:text-ink-2'
                     }`}
                   >
                     {showEval ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
@@ -201,8 +200,8 @@ export const EnginePanel: React.FC<EnginePanelProps> = ({
                     onClick={onToggleArrows}
                     className={`px-2 py-0.5 rounded text-xs border transition cursor-pointer ${
                       showArrows
-                        ? 'bg-zinc-800 border-zinc-700 text-zinc-200'
-                        : 'bg-transparent border-zinc-800/80 text-zinc-400 hover:text-zinc-400'
+                        ? 'bg-card border-line-strong text-ink'
+                        : 'bg-transparent border-line text-ink-2 hover:text-ink-2'
                     }`}
                   >
                     Mũi tên
@@ -213,8 +212,8 @@ export const EnginePanel: React.FC<EnginePanelProps> = ({
                     onClick={() => setOpenEngineSettings((v) => !v)}
                     className={`p-1 rounded border transition cursor-pointer ${
                       openEngineSettings
-                        ? 'bg-zinc-800 border-zinc-600 text-zinc-100'
-                        : 'bg-transparent border-zinc-800/80 text-zinc-400 hover:text-zinc-300'
+                        ? 'bg-card border-line-strong text-ink'
+                        : 'bg-transparent border-line text-ink-2 hover:text-ink-2'
                     }`}
                     title="Cài đặt thông số phân tích"
                   >
@@ -224,20 +223,30 @@ export const EnginePanel: React.FC<EnginePanelProps> = ({
               </div>
             </div>
 
-            {/* Thanh tỷ lệ cơ hội thắng Trắng vs Đen trực quan */}
+            {/* Thanh tỷ lệ cơ hội thắng Trắng vs Đen + điểm số trực quan */}
             {showEval && analysis && (
               <div className="space-y-1">
-                <div className="flex justify-between text-[11px] font-mono">
-                  <span className="text-zinc-300">
+                <div className="flex items-center justify-between text-[11px] font-mono">
+                  <span className="text-ink-2">
                     Trắng: <strong>{analysis.win_percent_white.toFixed(1)}%</strong>
                   </span>
-                  <span className="text-zinc-400">
+                  {analysis.lines[0] && (
+                    <span
+                      className={`px-1.5 py-0.2 rounded border text-[10px] tabular-nums ${getScoreBadgeClass(
+                        analysis.lines[0]
+                      )}`}
+                      title="Điểm đánh giá thế cờ hiện tại"
+                    >
+                      {formatLineScore(analysis.lines[0])}
+                    </span>
+                  )}
+                  <span className="text-ink-2">
                     Đen: <strong>{(100 - analysis.win_percent_white).toFixed(1)}%</strong>
                   </span>
                 </div>
-                <div className="w-full h-1.5 rounded-full overflow-hidden bg-zinc-800 flex">
+                <div className="w-full h-1.5 rounded-full overflow-hidden bg-card flex">
                   <div
-                    className="bg-zinc-200 transition-all duration-300"
+                    className="bg-accent transition-all duration-300"
                     style={{ width: `${analysis.win_percent_white}%` }}
                   />
                 </div>
@@ -247,20 +256,20 @@ export const EnginePanel: React.FC<EnginePanelProps> = ({
 
           {/* Popover chỉnh MultiPV & Depth */}
           {openEngineSettings && visibility.arrows && (
-            <div className="absolute left-3 right-3 top-20 z-30 bg-[#141418] border border-zinc-700/80 rounded-lg shadow-2xl p-3.5 space-y-3 text-xs">
-              <div className="flex items-center justify-between border-b border-zinc-800 pb-1.5">
-                <span className="font-medium text-zinc-100">Thông số phân tích</span>
+            <div className="absolute left-3 right-3 top-20 z-30 bg-overlay border border-line-strong rounded-lg shadow-2xl p-3.5 space-y-3 text-xs">
+              <div className="flex items-center justify-between border-b border-line pb-1.5">
+                <span className="font-medium text-ink">Thông số phân tích</span>
                 <button
                   onClick={() => setOpenEngineSettings(false)}
-                  className="text-zinc-400 hover:text-zinc-100 cursor-pointer"
+                  className="text-ink-2 hover:text-ink cursor-pointer"
                 >
                   Đóng
                 </button>
               </div>
               <div>
-                <div className="flex justify-between text-zinc-400 mb-1 text-xs">
+                <div className="flex justify-between text-ink-2 mb-1 text-xs">
                   <span>Số nhánh (MultiPV)</span>
-                  <span className="font-mono text-zinc-200">{multipv}</span>
+                  <span className="font-mono text-ink">{multipv}</span>
                 </div>
                 <input
                   type="range"
@@ -268,13 +277,13 @@ export const EnginePanel: React.FC<EnginePanelProps> = ({
                   max={5}
                   value={multipv}
                   onChange={(e) => onChangeMultipv(Number(e.target.value))}
-                  className="w-full accent-zinc-200 cursor-pointer"
+                  className="w-full accent-accent cursor-pointer"
                 />
               </div>
               <div>
-                <div className="flex justify-between text-zinc-400 mb-1 text-xs">
+                <div className="flex justify-between text-ink-2 mb-1 text-xs">
                   <span>Độ sâu (Depth)</span>
-                  <span className="font-mono text-zinc-200">{depth}</span>
+                  <span className="font-mono text-ink">{depth}</span>
                 </div>
                 <input
                   type="range"
@@ -282,7 +291,7 @@ export const EnginePanel: React.FC<EnginePanelProps> = ({
                   max={22}
                   value={depth}
                   onChange={(e) => onChangeDepth(Number(e.target.value))}
-                  className="w-full accent-zinc-200 cursor-pointer"
+                  className="w-full accent-accent cursor-pointer"
                 />
               </div>
             </div>
@@ -297,10 +306,10 @@ export const EnginePanel: React.FC<EnginePanelProps> = ({
                   return (
                     <div
                       key={line.rank}
-                      className="bg-zinc-950/80 hover:bg-zinc-950 border rounded px-2.5 py-1 flex items-center justify-between gap-2 group transition"
+                      className="bg-inset hover:bg-inset border rounded px-2.5 py-1 flex items-center justify-between gap-2 group transition"
                       style={{
                         borderColor:
-                          i === 0 ? rankStyle.border : 'rgba(39, 39, 42, 0.7)',
+                          i === 0 ? rankStyle.border : 'var(--c-line)',
                       }}
                     >
                       <div className="flex items-center gap-2 min-w-0">
@@ -316,10 +325,10 @@ export const EnginePanel: React.FC<EnginePanelProps> = ({
                         >
                           {formatLineScore(line)}
                         </span>
-                        <div className="truncate text-xs font-mono text-zinc-400">
+                        <div className="truncate text-xs font-mono text-ink-2">
                           <span
                             className="font-semibold mr-1.5"
-                            style={{ color: i === 0 ? '#34d399' : '#f4f4f5' }}
+                            style={{ color: i === 0 ? PV_RANK_COLORS[0] : 'var(--c-ink)' }}
                           >
                             {line.move_san}
                           </span>
@@ -329,7 +338,7 @@ export const EnginePanel: React.FC<EnginePanelProps> = ({
                       {phase === 'playing' && (
                         <button
                           onClick={() => onPlaySuggestedMove(line.move_uci)}
-                          className="opacity-0 group-hover:opacity-100 px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-[11px] flex items-center gap-0.5 shrink-0 transition cursor-pointer"
+                          className="opacity-0 group-hover:opacity-100 px-1.5 py-0.5 rounded bg-card hover:bg-overlay text-ink text-[11px] flex items-center gap-0.5 shrink-0 transition cursor-pointer"
                           title="Đi nước này"
                         >
                           <span>Đi</span>
@@ -340,7 +349,7 @@ export const EnginePanel: React.FC<EnginePanelProps> = ({
                   );
                 })
               ) : (
-                <div className="text-xs text-zinc-400 text-center py-2">
+                <div className="text-xs text-ink-2 text-center py-2">
                   {analysis?.is_game_over
                     ? `Kết thúc (${analysis.result})`
                     : 'Đang phân tích...'}
@@ -348,7 +357,7 @@ export const EnginePanel: React.FC<EnginePanelProps> = ({
               )}
             </div>
           ) : (
-            <div className="text-xs text-zinc-400 text-center py-1">
+            <div className="text-xs text-ink-2 text-center py-1">
               Mũi tên & gợi ý tắt ở mức “{ANALYSIS_LEVEL_LABELS[config.analysis].label}”.
             </div>
           )}

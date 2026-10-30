@@ -6,9 +6,12 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 5173",
     "build": "tsc -b && vite build",
-    "preview": "vite preview --host 0.0.0.0 --port 5173"
+    "preview": "vite preview --host 0.0.0.0 --port 5173",
+    "test": "esbuild src/__tests__/gameUtils.test.ts --bundle --platform=node --format=esm --outfile=/tmp/thechess-gameUtils.test.mjs && node --test /tmp/thechess-gameUtils.test.mjs"
   },
   "dependencies": {
+    "@fontsource/fraunces": "^5.3.0",
+    "@fontsource/ibm-plex-mono": "^5.3.0",
     "chess.js": "^1.0.0-beta.8",
     "lucide-react": "^0.460.0",
     "react": "^18.3.1",

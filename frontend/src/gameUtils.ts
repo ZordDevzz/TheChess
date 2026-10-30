@@ -40,9 +40,9 @@ export const MODE_PRESETS: ModePreset[] = [
   {
     id: 'online',
     label: 'Chơi qua mạng',
-    description: 'Đấu với người thật qua mạng.',
-    defaultConfig: { mode: 'online', analysis: 'off', allowTakeback: false, allowHints: false, opponent: 'ai' },
-    enabled: false,
+    description: 'Đấu trực tuyến cùng bạn bè (hỗ trợ mã phòng & tính điểm Elo).',
+    defaultConfig: { mode: 'online', analysis: 'off', allowTakeback: false, allowHints: false, opponent: 'human' },
+    enabled: true,
   },
 ];
 
@@ -71,12 +71,76 @@ export function buildAiPlayerName(ai: { engine: 'maia' | 'stockfish'; elo: numbe
   return ai.engine === 'maia' ? `Maia ${ai.elo}` : `Stockfish (${ai.elo} Elo)`;
 }
 
-export function makeDefaultPlayers(): { w: PlayerInfo; b: PlayerInfo } {
+export function makeDefaultPlayers(
+  playerColor: 'w' | 'b' = 'w'
+): { w: PlayerInfo; b: PlayerInfo } {
   const ai = { engine: 'maia' as const, elo: 1500 };
-  return {
-    w: { name: 'Player', type: 'human' },
-    b: { name: buildAiPlayerName(ai), type: 'ai', ai },
+  const humanPlayer: PlayerInfo = { name: 'Player', type: 'human' };
+  const aiPlayer: PlayerInfo = { name: buildAiPlayerName(ai), type: 'ai', ai };
+  return playerColor === 'w'
+    ? { w: humanPlayer, b: aiPlayer }
+    : { w: aiPlayer, b: humanPlayer };
+}
+
+/**
+ * Đảm bảo cấu hình 2 bên (players.w / players.b) luôn khớp với màu quân người chơi (`playerColor`)
+ * và loại đối thủ (`opponent`):
+ * - Nếu đấu AI (`opponent === 'ai'`): bên `playerColor` luôn là `human`, bên kia luôn là `ai`.
+ * - Nếu đấu 2 người (`opponent === 'human'`): cả 2 bên đều là `human`.
+ */
+export function alignPlayersWithColor(
+  players: { w: PlayerInfo; b: PlayerInfo },
+  playerColor: 'w' | 'b',
+  opponent: 'ai' | 'human'
+): { w: PlayerInfo; b: PlayerInfo } {
+  const oppSide: 'w' | 'b' = playerColor === 'w' ? 'b' : 'w';
+
+  if (opponent === 'human') {
+    const curHuman =
+      players[playerColor]?.type === 'human'
+        ? players[playerColor]
+        : { name: 'Player 1', type: 'human' as const };
+    const otherHuman =
+      players[oppSide]?.type === 'human'
+        ? players[oppSide]
+        : { name: 'Player 2', type: 'human' as const };
+    return {
+      [playerColor]: curHuman,
+      [oppSide]: otherHuman,
+    } as { w: PlayerInfo; b: PlayerInfo };
+  }
+
+  // Trường hợp đấu AI: nếu hai bên bị ngược (do đổi màu quân), hoán đổi lại
+  if (players[playerColor]?.type === 'ai' && players[oppSide]?.type === 'human') {
+    return {
+      [playerColor]: players[oppSide],
+      [oppSide]: players[playerColor],
+    } as { w: PlayerInfo; b: PlayerInfo };
+  }
+
+  const defaultAi = { engine: 'maia' as const, elo: 1500 };
+  const existingAi =
+    players[oppSide]?.type === 'ai' && players[oppSide].ai
+      ? players[oppSide].ai!
+      : players[playerColor]?.type === 'ai' && players[playerColor].ai
+      ? players[playerColor].ai!
+      : defaultAi;
+
+  const humanInfo: PlayerInfo =
+    players[playerColor]?.type === 'human'
+      ? players[playerColor]
+      : { name: 'Player', type: 'human' };
+
+  const aiInfo: PlayerInfo = {
+    name: buildAiPlayerName(existingAi),
+    type: 'ai',
+    ai: existingAi,
   };
+
+  return {
+    [playerColor]: humanInfo,
+    [oppSide]: aiInfo,
+  } as { w: PlayerInfo; b: PlayerInfo };
 }
 
 /**
@@ -138,13 +202,13 @@ export function detectGameOver(fen: string): GameOverInfo | null {
 
 const PIECE_VALUES: Record<string, number> = { p: 1, n: 3, b: 3, r: 5, q: 9 };
 const START_COUNTS: Record<string, number> = { p: 8, n: 2, b: 2, r: 2, q: 1 };
-// Dùng glyph filled cho cả 2 màu — phân biệt bằng màu chữ nơi hiển thị
-const CAPTURED_SYMBOLS: Record<string, string> = { p: '♟', n: '♞', b: '♝', r: '♜', q: '♛' };
+// Mã quân (ví dụ 'bQ') để render bằng bộ SVG Cburnett — xem src/theme/pieces.tsx
+const CAPTURED_CODES: Record<string, string> = { p: 'P', n: 'N', b: 'B', r: 'R', q: 'Q' };
 
 export interface MaterialInfo {
-  /** Quân Đen đã bị bắt (hiển thị cạnh người chơi Trắng) */
+  /** Mã quân Đen đã bị bắt, hiển thị cạnh người chơi Trắng */
   capturedByWhite: string[];
-  /** Quân Trắng đã bị bắt (hiển thị cạnh người chơi Đen) */
+  /** Mã quân Trắng đã bị bắt, hiển thị cạnh người chơi Đen */
   capturedByBlack: string[];
   /** Chênh lệch vật chất dương nghiêng về Trắng */
   diff: number;
@@ -175,13 +239,13 @@ export function getMaterialInfo(fen: string): MaterialInfo {
   }
 
   const missing = (color: 'w' | 'b'): string[] => {
-    const out: Array<{ sym: string; val: number }> = [];
+    const out: Array<{ code: string; val: number }> = [];
     for (const t of ['q', 'r', 'b', 'n', 'p'] as const) {
       const miss = Math.max(0, START_COUNTS[t] - counts[color][t]);
-      const sym = CAPTURED_SYMBOLS[t];
-      for (let i = 0; i < miss; i++) out.push({ sym, val: PIECE_VALUES[t] });
+      const code = `${color}${CAPTURED_CODES[t]}`;
+      for (let i = 0; i < miss; i++) out.push({ code, val: PIECE_VALUES[t] });
     }
-    return out.sort((a, b) => b.val - a.val).map((x) => x.sym);
+    return out.sort((a, b) => b.val - a.val).map((x) => x.code);
   };
 
   return {
@@ -284,14 +348,13 @@ export function downloadPgn(pgn: string, filename?: string): void {
 const STORAGE_KEY = 'thechess:game:v2';
 const LEGACY_KEY = 'thechess:game:v1';
 
-export type BoardThemeId = 'stone' | 'wood' | 'graphite';
-
 export interface SavedGameData {
   initialFen: string;
   movesUci: string[];
   currentPly: number;
   playerColor: 'w' | 'b';
-  boardTheme: BoardThemeId;
+  /** @deprecated V1 chuyển board theme sang store riêng (thechess:theme:v1) */
+  boardTheme?: string;
   phase: GamePhase;
   config: GameConfig;
   players: { w: PlayerInfo; b: PlayerInfo };
@@ -304,14 +367,13 @@ export interface RestoredGame {
   moves: MoveRecord[];
   currentPly: number;
   playerColor: 'w' | 'b';
-  boardTheme: BoardThemeId;
+  /** @deprecated board theme cũ (pre-V1) — dùng để migrate sang theme store */
+  boardTheme?: string;
   phase: GamePhase;
   config: GameConfig;
   players: { w: PlayerInfo; b: PlayerInfo };
   gameOver: GameOverInfo | null;
 }
-
-const VALID_THEMES: BoardThemeId[] = ['stone', 'wood', 'graphite'];
 
 function sanitizeConfig(raw: unknown): GameConfig {
   const d = raw as Partial<GameConfig> | null;
@@ -348,23 +410,26 @@ export function loadSavedGame(): RestoredGame | null {
       const data = JSON.parse(raw) as Partial<SavedGameData>;
       if (!data.initialFen || !Array.isArray(data.movesUci)) return null;
       const moves = recordsFromUciList(data.initialFen, data.movesUci);
-      const theme =
-        data.boardTheme && VALID_THEMES.includes(data.boardTheme)
-          ? data.boardTheme
-          : 'stone';
       const requestedPly =
         typeof data.currentPly === 'number' ? data.currentPly : moves.length;
       const phase: GamePhase =
         data.phase === 'playing' || data.phase === 'finished' ? data.phase : 'setup';
+      const playerColor: 'w' | 'b' = data.playerColor === 'b' ? 'b' : 'w';
+      const config = sanitizeConfig(data.config);
+      const players = alignPlayersWithColor(
+        sanitizePlayers(data.players),
+        playerColor,
+        config.opponent
+      );
       return {
         initialFen: data.initialFen,
         moves,
         currentPly: Math.max(0, Math.min(requestedPly, moves.length)),
-        playerColor: data.playerColor === 'b' ? 'b' : 'w',
-        boardTheme: theme,
+        playerColor,
+        boardTheme: typeof data.boardTheme === 'string' ? data.boardTheme : undefined,
         phase,
-        config: sanitizeConfig(data.config),
-        players: sanitizePlayers(data.players),
+        config,
+        players,
         gameOver:
           phase === 'finished' && data.gameOver?.result ? data.gameOver : null,
       };
@@ -378,18 +443,17 @@ export function loadSavedGame(): RestoredGame | null {
       if (!data.initialFen || !Array.isArray(data.movesUci)) return null;
       const moves = recordsFromUciList(data.initialFen, data.movesUci);
       if (moves.length === 0) return null;
+      const playerColor: 'w' | 'b' = data.playerColor === 'b' ? 'b' : 'w';
       return {
         initialFen: data.initialFen,
         moves,
         currentPly: moves.length,
-        playerColor: data.playerColor === 'b' ? 'b' : 'w',
+        playerColor,
         boardTheme:
-          data.boardTheme && VALID_THEMES.includes(data.boardTheme)
-            ? data.boardTheme
-            : 'stone',
+          typeof data.boardTheme === 'string' ? data.boardTheme : undefined,
         phase: 'playing',
         config: DEFAULT_GAME_CONFIG,
-        players: makeDefaultPlayers(),
+        players: makeDefaultPlayers(playerColor),
         gameOver: null,
       };
     }

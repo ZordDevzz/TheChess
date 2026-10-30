@@ -40,7 +40,7 @@ const KIND_STYLES: Record<
     icon: <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />,
   },
   info: {
-    container: 'bg-zinc-900/95 border-zinc-700/70 text-zinc-200',
+    container: 'bg-inset/95 border-line-strong/70 text-ink',
     icon: <Info className="w-4 h-4 text-sky-400 shrink-0" />,
   },
   success: {

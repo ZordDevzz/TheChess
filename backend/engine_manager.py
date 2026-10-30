@@ -9,6 +9,7 @@ Hỗ trợ:
 - Pool nhiều instance Stockfish để nhiều request chạy song song không khóa nhau
 """
 import asyncio
+from collections import OrderedDict
 import math
 import os
 import random
@@ -27,6 +28,8 @@ WEIGHTS_DIR = ENGINES_DIR / "weights"
 
 # Số instance Stockfish tối đa trong pool (cấu hình qua biến môi trường)
 MAX_POOL_SIZE = max(1, int(os.environ.get("THECHESS_ENGINE_POOL", "3")))
+MAX_ANALYSIS_CACHE = 256
+_FULL_STRENGTH_OPTS: Dict[str, Any] = {"UCI_LimitStrength": False, "Skill Level": 20}
 
 
 def find_stockfish_binary() -> Optional[str]:
@@ -88,6 +91,9 @@ class EngineManager:
         # Cache engine Lc0 theo Elo Maia (tránh spawn tiến trình mới mỗi nước)
         self._lc0_cache: Dict[int, _EngineSlot] = {}
         self._lc0_locks: Dict[int, asyncio.Lock] = {}
+
+        # LRU cache kết quả phân tích theo FEN để tránh đánh giá lặp lại cùng thế cờ
+        self._analysis_cache: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
 
     async def _spawn(self) -> _EngineSlot:
         sf_path = find_stockfish_binary()
@@ -238,16 +244,32 @@ class EngineManager:
                 "lines": [],
             }
 
+        clamped_depth = max(6, min(25, depth))
+        clamped_multipv = max(1, min(5, multipv))
+
+        cached = self._analysis_cache.get(fen)
+        if (
+            cached is not None
+            and cached["depth"] >= clamped_depth
+            and cached["multipv"] >= clamped_multipv
+        ):
+            self._analysis_cache.move_to_end(fen)
+            base_res = cached["result"]
+            return {
+                **base_res,
+                "lines": list(base_res["lines"][:clamped_multipv]),
+            }
+
         async with self.lease() as engine:
             limit = chess.engine.Limit(
-                depth=max(6, min(25, depth)),
+                depth=clamped_depth,
                 time=time_limit if time_limit else 1.2,
             )
             infos = await engine.analyse(
                 board,
                 limit,
-                multipv=max(1, min(5, multipv)),
-                options={"UCI_LimitStrength": False},
+                multipv=clamped_multipv,
+                options=_FULL_STRENGTH_OPTS,
             )
 
         if isinstance(infos, dict):
@@ -290,7 +312,7 @@ class EngineManager:
             lines.append(
                 {
                     "rank": idx,
-                    "depth": info.get("depth", depth),
+                    "depth": info.get("depth", clamped_depth),
                     "move_uci": first_move.uci(),
                     "move_san": board.san(first_move),
                     "from_square": chess.square_name(first_move.from_square),
@@ -305,7 +327,7 @@ class EngineManager:
             )
 
         top = lines[0] if lines else {"cp": 0, "mate": None, "win_percent_white": 50.0}
-        return {
+        result = {
             "fen": fen,
             "turn": "w" if board.turn == chess.WHITE else "b",
             "is_game_over": False,
@@ -314,6 +336,22 @@ class EngineManager:
             "win_percent_white": top["win_percent_white"],
             "lines": lines,
         }
+
+        if (
+            cached is None
+            or clamped_depth >= cached["depth"]
+            and clamped_multipv >= cached["multipv"]
+        ):
+            self._analysis_cache[fen] = {
+                "depth": clamped_depth,
+                "multipv": clamped_multipv,
+                "result": result,
+            }
+            self._analysis_cache.move_to_end(fen)
+            while len(self._analysis_cache) > MAX_ANALYSIS_CACHE:
+                self._analysis_cache.popitem(last=False)
+
+        return result
 
     async def get_ai_move(
         self,
@@ -361,7 +399,7 @@ class EngineManager:
                     board,
                     chess.engine.Limit(depth=shallow_depth, time=0.35),
                     multipv=min(5, board.legal_moves.count()),
-                    options={"UCI_LimitStrength": False},
+                    options=_FULL_STRENGTH_OPTS,
                 )
             if isinstance(infos, dict):
                 infos = [infos]
@@ -412,10 +450,10 @@ class EngineManager:
                 clamped_elo = max(1320, min(3190, elo))
                 opts["UCI_LimitStrength"] = True
                 opts["UCI_Elo"] = clamped_elo
+                opts["Skill Level"] = 20
                 engine_label = f"Stockfish ({clamped_elo} Elo)"
             else:
-                opts["UCI_LimitStrength"] = False
-                opts["Skill Level"] = 20
+                opts.update(_FULL_STRENGTH_OPTS)
                 engine_label = "Stockfish (Maximum Strength)"
 
             res = await engine.play(
@@ -455,7 +493,7 @@ class EngineManager:
                 board,
                 chess.engine.Limit(depth=depth, time=0.25),
                 multipv=1,
-                options={"UCI_LimitStrength": False},
+                options=_FULL_STRENGTH_OPTS,
             )
             if isinstance(init_info, list):
                 init_info = init_info[0]
@@ -513,7 +551,7 @@ class EngineManager:
                         board,
                         chess.engine.Limit(depth=depth, time=0.25),
                         multipv=1,
-                        options={"UCI_LimitStrength": False},
+                        options=_FULL_STRENGTH_OPTS,
                     )
                     if isinstance(info, list):
                         info = info[0]

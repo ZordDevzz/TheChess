@@ -1,10 +1,14 @@
-import React from 'react';
+import React, { useEffect } from 'react';
+import { PieceIcon, PieceCode } from '../theme/pieces';
 
-const PROMO_PIECES: Array<{ piece: 'q' | 'r' | 'b' | 'n'; name: string; white: string; black: string }> = [
-  { piece: 'q', name: 'Hậu', white: '♕', black: '♛' },
-  { piece: 'r', name: 'Xe', white: '♖', black: '♜' },
-  { piece: 'b', name: 'Tượng', white: '♗', black: '♝' },
-  { piece: 'n', name: 'Mã', white: '♘', black: '♞' },
+const PROMO_PIECES: Array<{
+  piece: 'q' | 'r' | 'b' | 'n';
+  name: string;
+}> = [
+  { piece: 'q', name: 'Hậu' },
+  { piece: 'r', name: 'Xe' },
+  { piece: 'b', name: 'Tượng' },
+  { piece: 'n', name: 'Mã' },
 ];
 
 interface PromotionDialogProps {
@@ -18,40 +22,54 @@ export const PromotionDialog: React.FC<PromotionDialogProps> = ({
   color,
   onPick,
   onCancel,
-}) => (
-  <div
-    className="absolute inset-0 z-20 bg-black/65 backdrop-blur-[2px] flex items-center justify-center"
-    onClick={onCancel}
-  >
+}) => {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onCancel();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onCancel]);
+
+  return (
     <div
-      className="bg-[#141418] border border-zinc-700/80 rounded-lg shadow-2xl p-3.5 space-y-2.5"
-      onClick={(e) => e.stopPropagation()}
+      className="absolute inset-0 z-20 bg-black/65 backdrop-blur-[2px] flex items-center justify-center"
+      onClick={onCancel}
     >
-      <div className="text-[11px] font-medium text-zinc-200 text-center">
-        Chọn quân phong cấp
-      </div>
-      <div className="grid grid-cols-4 gap-1.5">
-        {PROMO_PIECES.map((p) => (
-          <button
-            key={p.piece}
-            onClick={() => onPick(p.piece)}
-            className="flex flex-col items-center justify-center w-14 h-16 rounded-md border bg-zinc-950 border-zinc-800 hover:border-zinc-400 hover:bg-zinc-900 transition cursor-pointer"
-          >
-            <span className="text-3xl leading-none">
-              {color === 'w' ? p.white : p.black}
-            </span>
-            <span className="text-[9px] font-mono text-zinc-400 mt-1.5">
-              {p.name}
-            </span>
-          </button>
-        ))}
-      </div>
-      <button
-        onClick={onCancel}
-        className="w-full py-1 rounded text-[11px] text-zinc-400 hover:text-zinc-200 transition cursor-pointer"
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Chọn quân phong cấp"
+        className="bg-overlay border border-line-strong rounded-lg shadow-2xl p-3.5 space-y-2.5"
+        onClick={(e) => e.stopPropagation()}
       >
-        Hủy nước đi
-      </button>
+        <div className="text-[11px] font-medium text-ink text-center">
+          Chọn quân phong cấp
+        </div>
+        <div className="grid grid-cols-4 gap-1.5">
+          {PROMO_PIECES.map((p) => (
+            <button
+              key={p.piece}
+              onClick={() => onPick(p.piece)}
+              className="flex flex-col items-center justify-center w-14 h-16 rounded-md border bg-inset border-line hover:border-line-strong hover:bg-card transition cursor-pointer"
+            >
+              <PieceIcon
+                code={`${color}${p.piece.toUpperCase()}` as PieceCode}
+                size={34}
+              />
+              <span className="text-[10px] font-mono text-ink-2 mt-1">
+                {p.name}
+              </span>
+            </button>
+          ))}
+        </div>
+        <button
+          onClick={onCancel}
+          className="w-full py-1 rounded text-[11px] text-ink-3 hover:text-ink transition cursor-pointer"
+        >
+          Hủy nước đi
+        </button>
+      </div>
     </div>
-  </div>
-);
+  );
+};

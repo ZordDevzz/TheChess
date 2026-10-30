@@ -1,5 +1,6 @@
 import React from 'react';
 import { GameReviewResult, MoveRecord } from '../types';
+import { CLASSIFICATION_META, EVAL_CURSOR_COLOR } from '../theme/semantic';
 
 interface EvalGraphProps {
   moves: MoveRecord[];
@@ -51,19 +52,19 @@ export const EvalGraph: React.FC<EvalGraphProps> = ({
   ).toFixed(1)},${height}`;
 
   return (
-    <div className="shrink-0 bg-[#111114] p-3.5 space-y-2">
+    <div className="shrink-0 bg-panel p-3.5 space-y-2">
       <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2 text-xs text-zinc-400 min-w-0">
-          <span className="font-medium text-zinc-300">Biểu đồ lợi thế</span>
+        <div className="flex items-center gap-2 text-xs text-ink-2 min-w-0">
+          <span className="font-medium text-ink-2">Biểu đồ lợi thế</span>
           {reviewResult && (
             <span className="flex items-center gap-2 font-mono text-emerald-400 font-semibold shrink-0">
               <span className="flex items-center gap-1" title="Độ chính xác bên Trắng">
-                <span className="w-2.5 h-2.5 rounded-sm bg-zinc-100 border border-zinc-300 inline-block" />
+                <span className="w-2.5 h-2.5 rounded-sm bg-sq-w border border-line-strong inline-block" />
                 {reviewResult.white_accuracy}%
               </span>
-              <span className="text-zinc-400">·</span>
+              <span className="text-ink-2">·</span>
               <span className="flex items-center gap-1" title="Độ chính xác bên Đen">
-                <span className="w-2.5 h-2.5 rounded-sm bg-zinc-800 border border-zinc-600 inline-block" />
+                <span className="w-2.5 h-2.5 rounded-sm bg-sq-b border border-line-strong inline-block" />
                 {reviewResult.black_accuracy}%
               </span>
             </span>
@@ -75,7 +76,7 @@ export const EvalGraph: React.FC<EvalGraphProps> = ({
             {reviewResult && onOpenReview && (
               <button
                 onClick={onOpenReview}
-                className="px-2 py-0.5 rounded bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-xs text-zinc-300 cursor-pointer"
+                className="px-2 py-0.5 rounded bg-inset hover:bg-card border border-line text-xs text-ink-2 cursor-pointer"
               >
                 Chi tiết
               </button>
@@ -89,7 +90,7 @@ export const EvalGraph: React.FC<EvalGraphProps> = ({
                     ? 'Chấm điểm toàn ván bằng engine'
                     : 'Bị tắt khi đang thi đấu (chế độ chơi với máy)'
                 }
-                className="px-2.5 py-0.5 rounded bg-zinc-200 hover:bg-white disabled:bg-zinc-900 disabled:text-zinc-400 text-xs font-medium text-zinc-950 transition cursor-pointer"
+                className="px-2.5 py-0.5 rounded bg-accent hover:opacity-90 disabled:bg-inset disabled:text-ink-2 text-xs font-medium text-accent-ink transition cursor-pointer"
               >
                 {isReviewing ? 'Đang chấm...' : 'Game Review'}
               </button>
@@ -99,7 +100,7 @@ export const EvalGraph: React.FC<EvalGraphProps> = ({
       </div>
 
       {/* Biểu đồ có chấm màu định hướng các bước ngoặt */}
-      <div className="relative w-full h-16 bg-[#0b0b0d] rounded border border-zinc-800/70 overflow-hidden">
+      <div className="relative w-full h-16 bg-inset rounded border border-line overflow-hidden">
         <svg
           viewBox={`0 0 ${width} ${height}`}
           preserveAspectRatio="none"
@@ -112,23 +113,23 @@ export const EvalGraph: React.FC<EvalGraphProps> = ({
             onSelectPly(targetPly);
           }}
         >
-          <polygon points={areaCoords} fill="rgba(228, 228, 231, 0.16)" />
+          <polygon points={areaCoords} fill="var(--c-ink)" fillOpacity={0.14} />
           <line
             x1={0}
             y1={height / 2}
             x2={width}
             y2={height / 2}
-            stroke="#3f3f46"
+            stroke="var(--c-line-strong)"
             strokeDasharray="3 3"
             strokeWidth={1}
           />
-          <polyline fill="none" stroke="#e4e4e7" strokeWidth={1.8} points={lineCoords} />
+          <polyline fill="none" stroke="var(--c-ink)" strokeWidth={1.8} points={lineCoords} />
           <line
             x1={toX(currentPly)}
             y1={0}
             x2={toX(currentPly)}
             y2={height}
-            stroke="#38bdf8"
+            stroke={EVAL_CURSOR_COLOR}
             strokeWidth={1.8}
           />
           {points.map((p) => {
@@ -137,14 +138,18 @@ export const EvalGraph: React.FC<EvalGraphProps> = ({
               p.classification === 'Mistake' ||
               p.classification === 'Inaccuracy'
             ) {
+              const dotColor =
+                (p.classification && CLASSIFICATION_META[p.classification]?.color) ||
+                p.color ||
+                CLASSIFICATION_META.Blunder.color;
               return (
                 <circle
                   key={p.ply}
                   cx={toX(p.ply)}
                   cy={toY(p.winWhite)}
                   r={3.8}
-                  fill={p.color || '#f87171'}
-                  stroke="#09090b"
+                  fill={dotColor}
+                  stroke="var(--c-base)"
                   strokeWidth={1}
                 />
               );

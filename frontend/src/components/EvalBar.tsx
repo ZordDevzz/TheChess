@@ -8,6 +8,7 @@ interface EvalBarProps {
   enabled: boolean;
 }
 
+/** "Đũa thần" eval dọc sát bàn: nghiêng về bên nào đang thắng. */
 export const EvalBar: React.FC<EvalBarProps> = ({
   cp,
   mate,
@@ -16,11 +17,7 @@ export const EvalBar: React.FC<EvalBarProps> = ({
   enabled,
 }) => {
   if (!enabled) {
-    return (
-      <div className="w-5 h-full bg-zinc-900/60 border border-zinc-800/80 rounded-sm flex items-center justify-center text-[9px] text-zinc-400 select-none">
-        –
-      </div>
-    );
+    return null;
   }
 
   const clampedWin = Math.max(2, Math.min(98, winPercentWhite));
@@ -39,30 +36,35 @@ export const EvalBar: React.FC<EvalBarProps> = ({
 
   return (
     <div
-      className="relative w-5 rounded-sm overflow-hidden border border-zinc-800 flex flex-col select-none"
+      className="relative w-5 rounded-sm overflow-hidden border border-line flex flex-col select-none shadow-lg"
       style={{ height: '100%' }}
       title={`Đánh giá: ${scoreText} (${winPercentWhite.toFixed(1)}%)`}
+      role="meter"
+      aria-valuenow={Math.round(winPercentWhite)}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-label="Tỷ lệ thắng nghiêng về Trắng"
     >
       <div
         className={`w-full transition-all duration-500 ease-out ${
-          topIsBlack ? 'bg-[#1c1c20]' : 'bg-[#e4e2dd]'
+          topIsBlack ? 'bg-sq-b' : 'bg-sq-w'
         }`}
         style={{ height: `${topHeightPercent}%` }}
       />
       <div
         className={`w-full flex-1 transition-all duration-500 ease-out ${
-          topIsBlack ? 'bg-[#e4e2dd]' : 'bg-[#1c1c20]'
+          topIsBlack ? 'bg-sq-w' : 'bg-sq-b'
         }`}
       />
 
-      {/* Vạch giữa 50% tối giản */}
-      <div className="absolute top-1/2 left-0 right-0 h-[1px] bg-zinc-500/40 pointer-events-none" />
+      {/* Vạch giữa 50% */}
+      <div className="absolute top-1/2 left-0 right-0 h-px bg-ink-3/60 pointer-events-none" />
 
       <div
         className={`absolute left-0 right-0 text-center text-[9px] font-mono font-medium tracking-tighter pointer-events-none ${
           (whiteAdvantage && topIsBlack) || (!whiteAdvantage && !topIsBlack)
-            ? 'bottom-1.5 text-zinc-900'
-            : 'top-1.5 text-zinc-300'
+            ? 'bottom-1.5 text-ink-3'
+            : 'top-1.5 text-ink-3'
         }`}
       >
         {scoreText}

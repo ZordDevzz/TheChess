@@ -64,31 +64,31 @@ def classify_move(
     if best_uci and played_uci == best_uci:
         label = "Best"
         symbol = "★"
-        color = "#22c55e"
+        color = "#34d399"
     elif win_loss <= 1.5:
         label = "Best"
         symbol = "★"
-        color = "#22c55e"
+        color = "#34d399"
     elif win_loss <= 4.5:
         label = "Excellent"
         symbol = "!"
-        color = "#10b981"
+        color = "#2dd4bf"
     elif win_loss <= 8.0:
         label = "Good"
         symbol = "✓"
-        color = "#3b82f6"
+        color = "#60a5fa"
     elif win_loss <= 14.0:
         label = "Inaccuracy"
         symbol = "?!"
-        color = "#eab308"
+        color = "#facc15"
     elif win_loss <= 24.0:
         label = "Mistake"
         symbol = "?"
-        color = "#f97316"
+        color = "#fb923c"
     else:
         label = "Blunder"
         symbol = "??"
-        color = "#ef4444"
+        color = "#f87171"
 
     return {
         "classification": label,

@@ -2,18 +2,142 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Custom scrollbars for move history & panels */
+/* ============================================================
+   Design System V1 — "Phòng học cờ" (The Study)
+   Màu bão hòa chỉ mang ngữ nghĩa (eval/phan loại). Nền đơn sắc,
+   accent duy nhất là ivory màu quân trắng (dark) / mực in (light).
+   ============================================================ */
+
+:root,
+[data-theme='study'] {
+  color-scheme: dark;
+  --c-base: #0f1211;
+  --c-panel: #151a18;
+  --c-card: #1b211e;
+  --c-inset: #0c100e;
+  --c-overlay: #232b27;
+  --c-line: #273029;
+  --c-line-strong: #3a463f;
+  --c-ink: #e9ece8;
+  --c-ink-2: #a6b0aa;
+  --c-ink-3: #8a9690;
+  --c-accent: #edeae0;
+  --c-accent-ink: #10130f;
+  --c-danger: #f07167;
+  --c-sq-w: #e4e2dd;
+  --c-sq-b: #1c1c20;
+  --c-piece-b-rim: #d8ddd9;
+}
+
+[data-theme='graphite'] {
+  color-scheme: dark;
+  --c-base: #101012;
+  --c-panel: #161618;
+  --c-card: #1d1d20;
+  --c-inset: #0b0b0d;
+  --c-overlay: #242428;
+  --c-line: #262629;
+  --c-line-strong: #3a3a3f;
+  --c-ink: #e8e9eb;
+  --c-ink-2: #a2a6ad;
+  --c-ink-3: #8a8f98;
+  --c-accent: #e9eaec;
+  --c-accent-ink: #0f0f11;
+  --c-danger: #f07167;
+  --c-sq-w: #e3e4e6;
+  --c-sq-b: #1b1b1e;
+  --c-piece-b-rim: #dcdfe4;
+}
+
+[data-theme='scoresheet'] {
+  color-scheme: light;
+  --c-base: #f3f2ec;
+  --c-panel: #faf9f4;
+  --c-card: #ffffff;
+  --c-inset: #ebe9e0;
+  --c-overlay: #fffdf7;
+  --c-line: #ddd9ce;
+  --c-line-strong: #b9b4a6;
+  --c-ink: #1d201d;
+  --c-ink-2: #565b55;
+  --c-ink-3: #646963;
+  --c-accent: #1d201d;
+  --c-accent-ink: #f7f6f1;
+  --c-danger: #c2413a;
+  --c-sq-w: #ffffff;
+  --c-sq-b: #2a2c2a;
+  --c-piece-b-rim: #f7f6f1;
+}
+
+[data-theme='marble'] {
+  color-scheme: light;
+  --c-base: #f2f3f1;
+  --c-panel: #f9faf9;
+  --c-card: #ffffff;
+  --c-inset: #e9ebe9;
+  --c-overlay: #fdfefd;
+  --c-line: #dbdedb;
+  --c-line-strong: #b4bab5;
+  --c-ink: #1d1f20;
+  --c-ink-2: #54595a;
+  --c-ink-3: #626865;
+  --c-accent: #1d1f20;
+  --c-accent-ink: #f5f6f5;
+  --c-danger: #c2413a;
+  --c-sq-w: #ffffff;
+  --c-sq-b: #26282a;
+  --c-piece-b-rim: #f9faf9;
+}
+
+/* Lớp underlay tạo viền sáng (vector rim-light) cho quân Đen khi nằm ngoài bàn cờ */
+.piece-black-underlay,
+.piece-black-underlay * {
+  stroke: var(--c-piece-b-rim, #d8ddd9) !important;
+  stroke-width: 4.2px !important;
+  stroke-linejoin: round !important;
+  stroke-linecap: round !important;
+}
+
+html,
+body {
+  background-color: var(--c-base);
+  color: var(--c-ink-2);
+}
+
+/* Focus ring ivory 2px — visible trên mọi surface */
+:focus-visible {
+  outline: 2px solid var(--c-accent);
+  outline-offset: 2px;
+}
+
+/* Custom scrollbars theo token theme */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 ::-webkit-scrollbar-track {
-  background: #0f172a;
+  background: var(--c-inset);
 }
 ::-webkit-scrollbar-thumb {
-  background: #334155;
+  background: var(--c-line-strong);
   border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #475569;
+  background: var(--c-ink-3);
+}
+
+::selection {
+  background: var(--c-line-strong);
+  color: var(--c-ink);
+}
+
+/* Tôn trọng prefers-reduced-motion */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

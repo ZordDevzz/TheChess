@@ -65,11 +65,20 @@ export interface EngineStatus {
   lc0_path: string | null;
   maia_weights_available: number[];
   presets: PresetPosition[];
+  engines?: Array<{
+    id: string;
+    name: string;
+    description: string;
+    mode?: 'lc0_native' | 'human_policy_sampling';
+    elos?: number[];
+    min_elo?: number;
+    max_elo?: number;
+  }>;
 }
 
 export interface ReviewJobStatus {
   job_id: string;
-  status: 'running' | 'done' | 'error';
+  status: 'running' | 'done' | 'error' | 'cancelled';
   progress: { done: number; total: number };
   result?: GameReviewResult;
   error?: string;
@@ -161,3 +170,171 @@ export interface GameReviewResult {
     accuracy: number;
   }>;
 }
+
+// ---------------------------------------------------------------------------
+// Multiplayer V3: User, Match, MatchDetail, Lobby & Admin
+// ---------------------------------------------------------------------------
+
+export type AppScreen = 'home' | 'match' | 'admin';
+
+export type TimeControlType =
+  | 'untimed'
+  | 'bullet'
+  | 'blitz'
+  | 'rapid'
+  | 'classical'
+  | 'custom';
+
+export interface UserRecord {
+  id: string;
+  username: string;
+  email?: string | null;
+  display_name: string;
+  avatar_url?: string | null;
+  bio?: string | null;
+  role: 'admin' | 'player';
+  is_active: boolean;
+  must_change_password: boolean;
+  token_version: number;
+  created_by_id?: string | null;
+  is_bot: boolean;
+  bot_engine?: 'maia' | 'stockfish' | null;
+  bot_default_elo?: number | null;
+  rating: number;
+  peak_rating: number;
+  rating_deviation: number;
+  games_played: number;
+  wins: number;
+  draws: number;
+  losses: number;
+  white_wins: number;
+  black_wins: number;
+  current_streak: number;
+  best_win_streak: number;
+  avg_accuracy?: number | null;
+  preferred_board_theme: string;
+  preferred_piece_set: string;
+  last_login_at?: string | null;
+  last_seen_at?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MatchRecord {
+  id: string;
+  room_code?: string | null;
+  mode: GameModeId;
+  status: 'waiting' | 'setup' | 'playing' | 'finished' | 'aborted';
+  is_rated: boolean;
+  white_user_id: string;
+  black_user_id: string;
+  white_rating_before?: number | null;
+  white_rating_after?: number | null;
+  white_rating_delta?: number | null;
+  black_rating_before?: number | null;
+  black_rating_after?: number | null;
+  black_rating_delta?: number | null;
+  ai_elo_override?: number | null;
+  analysis_level: AnalysisLevel;
+  allow_takeback: boolean;
+  allow_hints: boolean;
+  time_control_type: TimeControlType;
+  initial_time_ms?: number | null;
+  increment_ms: number;
+  white_clock_ms?: number | null;
+  black_clock_ms?: number | null;
+  last_move_at?: string | null;
+  white_connected: boolean;
+  black_connected: boolean;
+  preset_id?: string | null;
+  initial_fen: string;
+  current_fen: string;
+  current_turn: 'w' | 'b';
+  total_plies: number;
+  result: '1-0' | '0-1' | '1/2-1/2' | '*';
+  winner_user_id?: string | null;
+  termination?: string | null;
+  pgn?: string | null;
+  review_status: 'none' | 'queued' | 'running' | 'done' | 'error';
+  white_accuracy?: number | null;
+  black_accuracy?: number | null;
+  review_summary?: Record<string, unknown> | null;
+  created_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  updated_at: string;
+}
+
+export interface MatchDetailRecord {
+  id: string;
+  match_id: string;
+  parent_detail_id?: string | null;
+  ply: number;
+  move_number: number;
+  is_mainline: boolean;
+  variation_index: number;
+  turn: 'w' | 'b';
+  player_user_id: string;
+  uci: string;
+  san: string;
+  from_sq: string;
+  to_sq: string;
+  promotion?: string | null;
+  piece_moved: string;
+  piece_captured?: string | null;
+  is_check: boolean;
+  is_checkmate: boolean;
+  is_castling: boolean;
+  fen_before: string;
+  fen_after: string;
+  time_spent_ms?: number | null;
+  clock_after_ms?: number | null;
+  hint_used: boolean;
+  cp?: number | null;
+  mate?: number | null;
+  win_percent_white?: number | null;
+  win_loss?: number | null;
+  accuracy?: number | null;
+  classification?: 'Best' | 'Excellent' | 'Good' | 'Inaccuracy' | 'Mistake' | 'Blunder' | null;
+  symbol?: string | null;
+  best_move_uci?: string | null;
+  best_move_san?: string | null;
+  pv_lines?: PVLine[] | null;
+  created_at: string;
+}
+
+export interface MatchSummaryItem {
+  match: MatchRecord;
+  white_player: UserRecord;
+  black_player: UserRecord;
+  is_system_exhibition: boolean;
+}
+
+export interface MatchWithDetailsResponse {
+  match: MatchRecord;
+  white_player: UserRecord;
+  black_player: UserRecord;
+  moves: MatchDetailRecord[];
+  variations: MatchDetailRecord[];
+}
+
+export interface SystemStats {
+  total_humans: number;
+  active_humans: number;
+  total_bots: number;
+  waiting_matches: number;
+  playing_matches: number;
+  finished_matches: number;
+}
+
+export interface LobbyResponse {
+  waiting_matches: MatchSummaryItem[];
+  live_matches: MatchSummaryItem[];
+  featured_match?: MatchSummaryItem | null;
+  my_history: MatchSummaryItem[];
+  club_history: MatchSummaryItem[];
+  online_players: UserRecord[];
+  bots: UserRecord[];
+  stats: SystemStats;
+}
+

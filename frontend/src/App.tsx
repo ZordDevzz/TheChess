@@ -4,22 +4,39 @@ import { Chessboard } from 'react-chessboard';
 import type { Arrow, Square } from 'react-chessboard/dist/chessboard/types';
 import {
   analyzePosition,
+  appendMatchMoveApi,
+  changePasswordApi,
   classifySingleMove,
+  clearAuthToken,
+  createMatchApi,
+  fetchLobbyApi,
+  fetchMeApi,
   fetchStatus,
-  getReviewJob,
+  finishMatchApi,
+  getAuthToken,
+  getMatchApi,
+  joinMatchApi,
+  loginApi,
+  quickLoginApi,
   requestAIMove,
-  startGameReview,
+  saveMatchReviewApi,
+  setAuthToken,
+  takebackMatchApi,
 } from './api';
 import {
   AnalysisResponse,
+  AppScreen,
   EngineStatus,
   GameConfig,
   GameOverInfo,
   GamePhase,
-  GameReviewResult,
+  MatchDetailRecord,
+  MatchRecord,
+  MatchWithDetailsResponse,
   MoveRecord,
   PlayerInfo,
-  PresetPosition,
+  PVLine,
+  UserRecord,
 } from './types';
 import { EnginePanel } from './components/EnginePanel';
 import { MoveHistory } from './components/MoveHistory';
@@ -31,10 +48,15 @@ import { CapturedBar } from './components/CapturedRail';
 import { PreMatchDialog } from './components/PreMatchDialog';
 import { GameOverDialog } from './components/GameOverDialog';
 import { ReviewScreen } from './components/ReviewScreen';
+import { LoginScreen, ChangePasswordModal } from './components/LoginScreen';
+import { UserDropdownMenu } from './components/UserDropdownMenu';
+import { HomeScreen, QuickCreateMatchOptions } from './components/HomeScreen';
+import { AdminScreen } from './components/AdminScreen';
 import {
   STARTING_FEN,
   ANALYSIS_LEVEL_LABELS,
   MODE_PRESETS,
+  alignPlayersWithColor,
   buildPgn,
   clearSavedGame,
   detectGameOver,
@@ -51,37 +73,101 @@ import {
   fenToBoardMap,
   boardMapToFenPlacement,
 } from './components/BoardEditor';
+import {
+  ARROW_COLORS,
+  CLASSIFICATION_META,
+  HINT_ARROW_COLOR,
+} from './theme/semantic';
+import { squareOverlays } from './theme/board';
+import { cburnettPieces } from './theme/pieces';
+import { ThemePicker } from './theme/ThemePicker';
+import { useTheme } from './theme/ThemeProvider';
+import { useBoardSize } from './hooks/useBoardSize';
+import { useGameReview } from './hooks/useGameReview';
 
 // Ván cờ đã lưu trong localStorage (nếu có), đọc một lần khi mount
 const SAVED_GAME = loadSavedGame();
 
-// Màu mũi tên đồng bộ với thứ hạng nhánh phân tích (Top 1: Xanh ngọc, Top 2: Xanh dương, Top 3: Vàng hổ phách)
-const ARROW_COLORS = [
-  'rgba(16, 185, 129, 0.82)',
-  'rgba(56, 189, 248, 0.72)',
-  'rgba(245, 158, 11, 0.68)',
-  'rgba(168, 85, 247, 0.6)',
-  'rgba(236, 72, 153, 0.55)',
-];
+function detailRecordsToMoveRecords(details: MatchDetailRecord[]): MoveRecord[] {
+  return details.map((d) => {
+    const cls = d.classification ?? undefined;
+    const color =
+      cls && CLASSIFICATION_META[cls] ? CLASSIFICATION_META[cls].color : undefined;
+    const symbol =
+      d.symbol ||
+      (cls && CLASSIFICATION_META[cls] ? CLASSIFICATION_META[cls].symbol : undefined);
+    return {
+      ply: d.ply,
+      moveNumber: d.move_number,
+      turn: d.turn,
+      uci: d.uci,
+      san: d.san,
+      from: d.from_sq,
+      to: d.to_sq,
+      fenBefore: d.fen_before,
+      fenAfter: d.fen_after,
+      cp: d.cp,
+      mate: d.mate,
+      winPercentWhite: d.win_percent_white ?? undefined,
+      classification: cls,
+      symbol,
+      color,
+      bestMoveUci: d.best_move_uci,
+      bestMoveSan: d.best_move_san,
+      accuracy: d.accuracy ?? undefined,
+      winLoss: d.win_loss ?? undefined,
+    };
+  });
+}
 
-const HINT_ARROW_COLOR = 'rgba(250, 204, 21, 0.92)';
-
-const BOARD_THEMES: Record<
-  'stone' | 'wood' | 'graphite',
-  { name: string; light: string; dark: string }
-> = {
-  stone: { name: 'Warm Stone', light: '#dedbd2', dark: '#878278' },
-  wood: { name: 'Classic Wood', light: '#eadbc8', dark: '#a98260' },
-  graphite: { name: 'Graphite', light: '#cfd1d4', dark: '#5e6268' },
-};
+function userRecordToPlayerInfo(
+  u: UserRecord | null,
+  fallbackName: string,
+  aiEloOverride?: number | null
+): PlayerInfo {
+  if (!u) {
+    return {
+      name: fallbackName,
+      type: 'human',
+    };
+  }
+  if (u.is_bot) {
+    return {
+      name: u.display_name,
+      type: 'ai',
+      ai: {
+        engine: (u.bot_engine as 'maia' | 'stockfish') || 'maia',
+        elo: aiEloOverride || u.bot_default_elo || u.rating || 1500,
+      },
+    };
+  }
+  return {
+    name: u.display_name,
+    type: 'human',
+  };
+}
 
 export const App: React.FC = () => {
+  const { boardTheme } = useTheme();
   const [status, setStatus] = useState<EngineStatus | null>(null);
   const [backendError, setBackendError] = useState<string | null>(null);
+
+  // --- Auth & Điều hướng màn hình (Multiplayer V3) ---
+  const [currentUser, setCurrentUser] = useState<UserRecord | null>(null);
+  const [authChecking, setAuthChecking] = useState<boolean>(true);
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const [showPasswordModal, setShowPasswordModal] = useState<boolean>(false);
+  const [screen, setScreen] = useState<AppScreen>('home');
   const [activeTab, setActiveTab] = useState<'play' | 'editor'>('play');
-  const [boardTheme, setBoardTheme] = useState<'stone' | 'wood' | 'graphite'>(
-    SAVED_GAME?.boardTheme ?? 'stone'
-  );
+
+  // --- Trạng thái ván đấu Multiplayer ---
+  const [activeMatch, setActiveMatch] = useState<MatchRecord | null>(null);
+  const [isSpectator, setIsSpectator] = useState<boolean>(false);
+  const [whiteClockMs, setWhiteClockMs] = useState<number | null>(null);
+  const [blackClockMs, setBlackClockMs] = useState<number | null>(null);
+  const [whiteRating, setWhiteRating] = useState<number | null>(null);
+  const [blackRating, setBlackRating] = useState<number | null>(null);
+  const lastTurnStartRef = useRef<number>(Date.now());
 
   // --- Biên bản ván cờ ---
   const [initialFen, setInitialFen] = useState<string>(
@@ -104,8 +190,11 @@ export const App: React.FC = () => {
   const [config, setConfig] = useState<GameConfig>(
     SAVED_GAME?.config ?? MODE_PRESETS[1].defaultConfig
   );
-  const [players, setPlayers] = useState<{ w: PlayerInfo; b: PlayerInfo }>(
-    SAVED_GAME?.players ?? makeDefaultPlayers()
+  const [playerColor, setPlayerColor] = useState<'w' | 'b'>(
+    SAVED_GAME?.playerColor ?? 'w'
+  );
+  const [players, setPlayers] = useState<{ w: PlayerInfo; b: PlayerInfo }>(() =>
+    SAVED_GAME?.players ?? makeDefaultPlayers(SAVED_GAME?.playerColor ?? 'w')
   );
   const [gameOver, setGameOver] = useState<GameOverInfo | null>(
     SAVED_GAME?.gameOver ?? null
@@ -117,12 +206,8 @@ export const App: React.FC = () => {
     SAVED_GAME?.phase === 'finished'
   );
   const [reviewMode, setReviewMode] = useState(false);
+  const [reviewLines, setReviewLines] = useState<PVLine[] | null>(null);
   const [hintArrow, setHintArrow] = useState<Arrow | null>(null);
-
-  // --- Người chơi / AI ---
-  const [playerColor, setPlayerColor] = useState<'w' | 'b'>(
-    SAVED_GAME?.playerColor ?? 'w'
-  );
   const [isAiThinking, setIsAiThinking] = useState(false);
 
   // --- Phân tích ---
@@ -133,31 +218,115 @@ export const App: React.FC = () => {
   const [analysis, setAnalysis] = useState<AnalysisResponse | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
 
-  // --- Game Review ---
-  const [reviewResult, setReviewResult] = useState<GameReviewResult | null>(null);
-  const [isReviewing, setIsReviewing] = useState<boolean>(false);
-  const [reviewProgress, setReviewProgress] = useState<{
-    done: number;
-    total: number;
-  } | null>(null);
-
   // --- Board Editor ---
   const [editorBoardMap, setEditorBoardMap] = useState<Record<string, string>>(
     () => fenToBoardMap(STARTING_FEN)
   );
   const [editorTool, setEditorTool] = useState<EditorTool>('wQ');
 
-  const boardStageRef = useRef<HTMLDivElement | null>(null);
-  const [boardSize, setBoardSize] = useState<number>(560);
-
   const { toasts, pushToast, dismissToast } = useToasts();
+  const { boardStageRef, boardSize, showSideRails } = useBoardSize(
+    activeTab,
+    `${screen}-${authChecking}`
+  );
+  const {
+    reviewResult,
+    isReviewing,
+    reviewProgress,
+    handleRunGameReview,
+    resetReview,
+  } = useGameReview({
+    initialFen,
+    moves,
+    setMoves,
+    pushToast,
+  });
+
+  // ------------------ Khởi tạo Auth & Quick-Link ------------------
+
+  useEffect(() => {
+    let cancelled = false;
+    const initAuth = async () => {
+      const params = new URLSearchParams(window.location.search);
+      const quickToken = params.get('q') || params.get('login_token');
+      if (quickToken) {
+        try {
+          const res = await quickLoginApi(quickToken);
+          if (cancelled) return;
+          setAuthToken(res.token);
+          window.history.replaceState({}, '', window.location.pathname);
+          setCurrentUser(res.user);
+          setAuthChecking(false);
+          pushToast(
+            `Xin chào ${res.user.display_name}! Đã đăng nhập qua Quick-Link.`,
+            'success'
+          );
+          return;
+        } catch (err) {
+          console.error('Quick-link error:', err);
+          window.history.replaceState({}, '', window.location.pathname);
+          if (!cancelled) {
+            setLoginError(
+              err instanceof Error
+                ? err.message
+                : 'Quick-Link không hợp lệ hoặc đã hết hạn.'
+            );
+          }
+        }
+      }
+
+      const existingToken = getAuthToken();
+      if (existingToken) {
+        try {
+          const me = await fetchMeApi();
+          if (!cancelled) {
+            setCurrentUser(me);
+          }
+        } catch {
+          clearAuthToken();
+        }
+      }
+      if (!cancelled) {
+        setAuthChecking(false);
+      }
+    };
+
+    initAuth();
+    return () => {
+      cancelled = true;
+    };
+  }, [pushToast]);
+
+  const handleLogin = async (username: string, password: string) => {
+    setLoginError(null);
+    const res = await loginApi(username, password);
+    setAuthToken(res.token);
+    setCurrentUser(res.user);
+    setScreen('home');
+    pushToast(`Chào mừng trở lại, ${res.user.display_name}!`, 'success');
+  };
+
+  const handleLogout = () => {
+    clearAuthToken();
+    setCurrentUser(null);
+    setActiveMatch(null);
+    setScreen('home');
+  };
+
+  const handlePasswordChange = async (newPassword: string, displayName: string) => {
+    const res = await changePasswordApi(newPassword, displayName);
+    setAuthToken(res.token);
+    setCurrentUser(res.user);
+    setShowPasswordModal(false);
+    pushToast('Đã cập nhật hồ sơ & mật khẩu thành công.', 'success');
+  };
 
   // ------------------ Derived ------------------
 
   const currentFen =
     currentPly === 0 ? initialFen : moves[currentPly - 1]?.fenAfter || initialFen;
 
-  const chessInstance = React.useMemo(() => {
+  const chessInstance = useMemo(() => {
     try {
       return new Chess(currentFen);
     } catch {
@@ -165,63 +334,267 @@ export const App: React.FC = () => {
     }
   }, [currentFen]);
 
-  const visibility = useMemo(
+  const baseVisibility = useMemo(
     () => resolveFeatureVisibility(config, phase),
     [config, phase]
   );
+
+  // Nếu là khán giả (Spectator), khóa đi quân nhưng mở khóa thanh đánh giá & mũi tên engine
+  const visibility = useMemo(() => {
+    if (isSpectator) {
+      return {
+        ...baseVisibility,
+        canMove: false,
+        evalBar: true,
+        arrows: true,
+        hints: false,
+        takeback: false,
+        reviewButton: true,
+      };
+    }
+    return baseVisibility;
+  }, [baseVisibility, isSpectator]);
 
   const modeLabel =
     MODE_PRESETS.find((m) => m.id === config.mode)?.label ?? config.mode;
 
   const aiSide: 'w' | 'b' = playerColor === 'w' ? 'b' : 'w';
   const aiPlayer =
-    config.opponent === 'ai' && players[aiSide]?.type === 'ai'
+    !isSpectator && config.opponent === 'ai' && players[aiSide]?.type === 'ai'
       ? players[aiSide]
       : null;
 
   const material = useMemo(() => getMaterialInfo(currentFen), [currentFen]);
 
   const analysisEnabled =
+    screen === 'match' &&
     activeTab === 'play' &&
-    (phase === 'finished' || (phase === 'playing' && config.analysis !== 'off'));
+    (isSpectator ||
+      phase === 'finished' ||
+      (phase === 'playing' && config.analysis !== 'off'));
+
+  // Đổi màu quân người chơi kèm đồng bộ players.w ↔ players.b (tránh lỗi ISS-01)
+  const handleChangePlayerColor = useCallback(
+    (nextColor: 'w' | 'b') => {
+      setPlayerColor(nextColor);
+      setBoardOrientation(nextColor === 'w' ? 'white' : 'black');
+      setPlayers((prev) =>
+        alignPlayersWithColor(prev, nextColor, config.opponent)
+      );
+    },
+    [config.opponent]
+  );
+
+  // ------------------ Hydrate Match từ Backend DB ------------------
+
+  const hydrateMatchFromServer = useCallback(
+    (
+      res: MatchWithDetailsResponse,
+      viewer: UserRecord,
+      options?: { openReview?: boolean }
+    ) => {
+      const m = res.match;
+      setActiveMatch(m);
+
+      const isWhiteMe = m.white_user_id === viewer.id;
+      const isBlackMe = m.black_user_id === viewer.id;
+      const isSystemMatch =
+        res.white_player?.is_bot && res.black_player?.is_bot;
+      const participant = (isWhiteMe || isBlackMe) && !isSystemMatch;
+      setIsSpectator(!participant);
+
+      const mySide: 'w' | 'b' = isBlackMe && !isWhiteMe ? 'b' : 'w';
+      setPlayerColor(mySide);
+      setBoardOrientation(mySide === 'b' ? 'black' : 'white');
+
+      const wInfo = userRecordToPlayerInfo(
+        res.white_player,
+        m.status === 'waiting' ? 'Đang chờ đối thủ...' : 'Trắng',
+        m.ai_elo_override
+      );
+      const bInfo = userRecordToPlayerInfo(
+        res.black_player,
+        m.status === 'waiting' ? 'Đang chờ đối thủ...' : 'Đen',
+        m.ai_elo_override
+      );
+      setPlayers({ w: wInfo, b: bInfo });
+      setWhiteRating(m.white_rating_after ?? m.white_rating_before ?? res.white_player?.rating ?? null);
+      setBlackRating(m.black_rating_after ?? m.black_rating_before ?? res.black_player?.rating ?? null);
+
+      const hasBotPlayer = Boolean(
+        res.white_player?.is_bot || res.black_player?.is_bot
+      );
+      const nextConfig: GameConfig = {
+        mode: m.mode,
+        analysis: m.analysis_level,
+        allowTakeback: m.allow_takeback,
+        allowHints: m.allow_hints,
+        opponent: m.mode === 'vs_ai' || hasBotPlayer ? 'ai' : 'human',
+      };
+      setConfig(nextConfig);
+
+      const fenStart = m.initial_fen || STARTING_FEN;
+      const builtMoves = detailRecordsToMoveRecords(res.moves);
+      setInitialFen(fenStart);
+      setMoves(builtMoves);
+      setCurrentPly(builtMoves.length);
+      setWhiteClockMs(m.white_clock_ms ?? m.initial_time_ms ?? null);
+      setBlackClockMs(m.black_clock_ms ?? m.initial_time_ms ?? null);
+      lastTurnStartRef.current = Date.now();
+
+      resetReview();
+      setSelectedSquare(null);
+      setPendingPromo(null);
+      setHintArrow(null);
+      setShowPreMatch(false);
+
+      if (m.status === 'finished' || m.status === 'aborted') {
+        setPhase('finished');
+        const winner =
+          m.result === '1-0' ? 'w' : m.result === '0-1' ? 'b' : null;
+        setGameOver({
+          result: m.result === '*' ? '1/2-1/2' : m.result,
+          reason: m.termination || 'Kết thúc ván đấu',
+          winner,
+        });
+        setShowGameOver(!options?.openReview);
+        setReviewMode(Boolean(options?.openReview));
+      } else {
+        setPhase('playing');
+        setGameOver(null);
+        setShowGameOver(false);
+        setReviewMode(false);
+      }
+
+      setActiveTab('play');
+      setScreen('match');
+    },
+    [resetReview]
+  );
+
+  // ------------------ Lobby Callbacks ------------------
+
+  const handleCreateMatchFromLobby = async (opts: QuickCreateMatchOptions) => {
+    if (!currentUser) return;
+    const chosenColor: 'w' | 'b' =
+      opts.side === 'random'
+        ? Math.random() < 0.5
+          ? 'w'
+          : 'b'
+        : opts.side;
+
+    let whiteId = currentUser.id;
+    let blackId = currentUser.id;
+    let matchStatus: 'waiting' | 'playing' = 'playing';
+
+    const useBotOpponent =
+      opts.mode === 'vs_ai' ||
+      (opts.mode === 'training' && opts.opponentType === 'ai');
+
+    if (opts.mode === 'online') {
+      matchStatus = 'waiting';
+      if (opts.targetOpponentId && opts.targetOpponentId !== currentUser.id) {
+        if (chosenColor === 'w') {
+          whiteId = currentUser.id;
+          blackId = opts.targetOpponentId;
+        } else {
+          whiteId = opts.targetOpponentId;
+          blackId = currentUser.id;
+        }
+      } else {
+        // Tạm đặt cả 2 vị trí bằng user tạo phòng, khi người thứ 2 join sẽ gán vào vị trí còn lại
+        whiteId = currentUser.id;
+        blackId = currentUser.id;
+      }
+    } else if (useBotOpponent) {
+      const nearestMaia = Math.min(
+        1900,
+        Math.max(1100, Math.round(opts.aiElo / 100) * 100)
+      );
+      const botId =
+        opts.aiEngine === 'stockfish'
+          ? 'bot_stockfish'
+          : `bot_maia_${nearestMaia}`;
+      if (chosenColor === 'w') {
+        whiteId = currentUser.id;
+        blackId = botId;
+      } else {
+        whiteId = botId;
+        blackId = currentUser.id;
+      }
+    }
+
+    const analysisLevel =
+      opts.mode === 'online' ? 'off' : opts.analysisLevel;
+    const allowTakeback =
+      opts.mode === 'online' ? false : opts.allowTakeback;
+    const allowHints = opts.mode === 'online' ? false : opts.allowHints;
+
+    const res = await createMatchApi({
+      mode: opts.mode,
+      status: matchStatus,
+      is_rated: opts.isRated,
+      white_user_id: whiteId,
+      black_user_id: blackId,
+      ai_elo_override: useBotOpponent ? opts.aiElo : null,
+      analysis_level: analysisLevel,
+      allow_takeback: allowTakeback,
+      allow_hints: allowHints,
+      time_control_type: opts.timeControlType,
+      initial_time_ms: opts.initialTimeMs,
+      increment_ms: opts.incrementMs,
+      preset_id: opts.presetId ?? null,
+      initial_fen: opts.initialFen || STARTING_FEN,
+      generate_room_code: opts.mode === 'online',
+    });
+
+    hydrateMatchFromServer(res, currentUser);
+    if (res.match.status === 'waiting') {
+      pushToast(
+        `Đã tạo phòng chờ #${res.match.room_code}. Chia sẻ mã này cho đối thủ!`,
+        'info'
+      );
+    } else {
+      pushToast('Đã bắt đầu ván đấu mới!', 'success');
+    }
+  };
+
+  const handleJoinMatchByCodeOrId = async (codeOrId: string) => {
+    if (!currentUser) return;
+    const res = await joinMatchApi(codeOrId);
+    hydrateMatchFromServer(res, currentUser);
+    pushToast(
+      `Đã vào bàn đấu #${res.match.room_code || res.match.id.slice(0, 6)}!`,
+      'success'
+    );
+  };
+
+  const handleOpenLiveMatch = async (matchId: string) => {
+    if (!currentUser) return;
+    const res = await getMatchApi(matchId);
+    hydrateMatchFromServer(res, currentUser);
+  };
+
+  const handleOpenHistoryMatchReview = async (matchId: string) => {
+    if (!currentUser) return;
+    const res = await getMatchApi(matchId);
+    hydrateMatchFromServer(res, currentUser, { openReview: true });
+  };
 
   // ------------------ Effects ------------------
 
-  // Tự động lưu ván cờ + trạng thái vào localStorage
   useEffect(() => {
     saveGame({
       initialFen,
       movesUci: moves.map((m) => m.uci),
       currentPly,
       playerColor,
-      boardTheme,
       phase,
       config,
       players,
       gameOver,
     });
-  }, [initialFen, moves, currentPly, playerColor, boardTheme, phase, config, players, gameOver]);
-
-  useEffect(() => {
-    const el = boardStageRef.current;
-    if (!el) return;
-    const updateSize = () => {
-      const rect = el.getBoundingClientRect();
-      const availH = rect.height - 64; // trừ 2 PlayerCard + gap
-      // Bar 2 bên rộng 28% board mỗi bar -> giải B * (1 + 0.56) <= W - gap/padding
-      const availW = (rect.width - 60) / 1.56;
-      const optimal = Math.max(280, Math.floor(Math.min(availW, availH)));
-      setBoardSize(optimal);
-    };
-    updateSize();
-    const ro = new ResizeObserver(updateSize);
-    ro.observe(el);
-    window.addEventListener('resize', updateSize);
-    return () => {
-      ro.disconnect();
-      window.removeEventListener('resize', updateSize);
-    };
-  }, []);
+  }, [initialFen, moves, currentPly, playerColor, phase, config, players, gameOver]);
 
   useEffect(() => {
     fetchStatus()
@@ -237,6 +610,209 @@ export const App: React.FC = () => {
       });
   }, []);
 
+  // Đồng hồ Fischer đếm ngược khi ván đang playing và có giới hạn thời gian
+  useEffect(() => {
+    if (
+      screen !== 'match' ||
+      phase !== 'playing' ||
+      !activeMatch ||
+      activeMatch.status !== 'playing' ||
+      activeMatch.initial_time_ms == null
+    ) {
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      const turn = chessInstance.turn();
+      if (turn === 'w') {
+        setWhiteClockMs((prev) => (prev != null ? Math.max(0, prev - 250) : null));
+      } else {
+        setBlackClockMs((prev) => (prev != null ? Math.max(0, prev - 250) : null));
+      }
+    }, 250);
+
+    return () => window.clearInterval(interval);
+  }, [screen, phase, activeMatch, chessInstance]);
+
+  // Phát hiện hết giờ (Timeout)
+  useEffect(() => {
+    if (
+      screen !== 'match' ||
+      phase !== 'playing' ||
+      !activeMatch ||
+      activeMatch.status !== 'playing' ||
+      activeMatch.initial_time_ms == null ||
+      isSpectator
+    ) {
+      return;
+    }
+    if (whiteClockMs !== null && whiteClockMs <= 0) {
+      const info: GameOverInfo = {
+        result: '0-1',
+        reason: 'Trắng hết giờ',
+        winner: 'b',
+      };
+      setGameOver(info);
+      setPhase('finished');
+      setShowGameOver(true);
+      finishMatchApi(activeMatch.id, '0-1', 'timeout').catch(console.error);
+    } else if (blackClockMs !== null && blackClockMs <= 0) {
+      const info: GameOverInfo = {
+        result: '1-0',
+        reason: 'Đen hết giờ',
+        winner: 'w',
+      };
+      setGameOver(info);
+      setPhase('finished');
+      setShowGameOver(true);
+      finishMatchApi(activeMatch.id, '1-0', 'timeout').catch(console.error);
+    }
+  }, [screen, phase, activeMatch, whiteClockMs, blackClockMs, isSpectator]);
+
+  // Polling đồng bộ phòng chờ / đấu Online / xem trực tiếp (Spectator)
+  const movesLenRef = useRef<number>(moves.length);
+  useEffect(() => {
+    movesLenRef.current = moves.length;
+  }, [moves.length]);
+
+  useEffect(() => {
+    if (screen !== 'match' || !activeMatch || !currentUser) return;
+    const shouldPoll =
+      activeMatch.status === 'waiting' ||
+      activeMatch.mode === 'online' ||
+      isSpectator;
+    if (!shouldPoll) return;
+
+    let cancelled = false;
+    const matchId = activeMatch.id;
+    const prevStatus = activeMatch.status;
+
+    const timer = window.setInterval(async () => {
+      if (cancelled) return;
+      try {
+        const res = await getMatchApi(matchId);
+        if (cancelled) return;
+        const m = res.match;
+
+        // Phòng chờ vừa có người vào
+        if (prevStatus === 'waiting' && m.status === 'playing') {
+          hydrateMatchFromServer(res, currentUser);
+          pushToast('Đối thủ đã vào bàn! Ván đấu bắt đầu.', 'success');
+          return;
+        }
+
+        // Cập nhật biên bản nếu có nước đi mới từ đối thủ hoặc hệ thống
+        if (
+          res.moves.length !== movesLenRef.current ||
+          m.status !== prevStatus
+        ) {
+          const prevLen = movesLenRef.current;
+          setActiveMatch(m);
+          const built = detailRecordsToMoveRecords(res.moves);
+          setMoves((prevMoves) =>
+            built.map((bm) => {
+              const existing = prevMoves.find(
+                (pm) => pm.ply === bm.ply && pm.uci === bm.uci
+              );
+              if (!existing) return bm;
+              return {
+                ...bm,
+                cp: bm.cp ?? existing.cp,
+                mate: bm.mate ?? existing.mate,
+                winPercentWhite:
+                  bm.winPercentWhite ?? existing.winPercentWhite,
+                classification: bm.classification ?? existing.classification,
+                symbol: bm.symbol ?? existing.symbol,
+                color: bm.color ?? existing.color,
+              };
+            })
+          );
+          setCurrentPly((prevPly) =>
+            prevPly >= Math.max(0, prevLen - 1) ? built.length : prevPly
+          );
+          setWhiteClockMs(m.white_clock_ms ?? m.initial_time_ms ?? null);
+          setBlackClockMs(m.black_clock_ms ?? m.initial_time_ms ?? null);
+
+          if (m.status === 'finished' || m.status === 'aborted') {
+            setPhase('finished');
+            const winner =
+              m.result === '1-0' ? 'w' : m.result === '0-1' ? 'b' : null;
+            setGameOver({
+              result: m.result === '*' ? '1/2-1/2' : m.result,
+              reason: m.termination || 'Kết thúc ván đấu',
+              winner,
+            });
+            if (!isSpectator) {
+              setShowGameOver(true);
+            } else if (res.white_player?.is_bot && res.black_player?.is_bot) {
+              // Nếu đang xem trận biểu diễn AI vs AI và ván kết thúc, tự động chuyển sang ván biểu diễn mới
+              pushToast(
+                'Ván biểu diễn đã kết thúc — đang chuyển sang ván trực tiếp mới...',
+                'info'
+              );
+              window.setTimeout(async () => {
+                if (cancelled) return;
+                try {
+                  const lobbyData = await fetchLobbyApi(true);
+                  const nextLive =
+                    lobbyData.featured_match || lobbyData.live_matches[0];
+                  if (nextLive && nextLive.match.id !== matchId) {
+                    const nextRes = await getMatchApi(nextLive.match.id);
+                    hydrateMatchFromServer(nextRes, currentUser);
+                  }
+                } catch {
+                  // ignore
+                }
+              }, 2200);
+            }
+          }
+        }
+      } catch {
+        // ignore transient network errors
+      }
+    }, 1800);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [
+    screen,
+    activeMatch?.id,
+    activeMatch?.status,
+    activeMatch?.mode,
+    currentUser,
+    isSpectator,
+    hydrateMatchFromServer,
+    pushToast,
+  ]);
+
+  // Tự động lưu kết quả Game Review vào DB khi hoàn tất chấm điểm
+  const savedReviewMatchIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!reviewResult || !activeMatch) return;
+    if (savedReviewMatchIdRef.current === activeMatch.id) return;
+    savedReviewMatchIdRef.current = activeMatch.id;
+
+    saveMatchReviewApi(activeMatch.id, {
+      white_accuracy: reviewResult.white_accuracy,
+      black_accuracy: reviewResult.black_accuracy,
+      review_summary: reviewResult.counts,
+      ply_evaluations: reviewResult.moves.map((rm) => ({
+        ply: rm.ply,
+        cp: rm.cp,
+        mate: rm.mate,
+        win_percent_white: rm.win_percent_white,
+        classification: rm.classification,
+        symbol: rm.symbol,
+        best_move_uci: rm.best_move_uci,
+        best_move_san: rm.best_move_san,
+        accuracy: rm.accuracy,
+        win_loss: rm.win_loss,
+      })),
+    }).catch((err) => console.error('Lỗi lưu Game Review vào DB:', err));
+  }, [reviewResult, activeMatch]);
+
   // Phân tích live — chỉ chạy khi được phép theo chế độ chơi + phase
   const abortControllerRef = useRef<AbortController | null>(null);
   useEffect(() => {
@@ -251,11 +827,31 @@ export const App: React.FC = () => {
     const controller = new AbortController();
     abortControllerRef.current = controller;
 
+    const effectiveDepth =
+      isSpectator && phase === 'playing' ? Math.min(depth, 12) : depth;
+
     setIsAnalyzing(true);
-    analyzePosition(currentFen, depth, multipv, controller.signal)
+    analyzePosition(currentFen, effectiveDepth, multipv, controller.signal)
       .then((res) => {
         setAnalysis(res);
         setIsAnalyzing(false);
+        // Backfill điểm đánh giá trực tiếp vào nước đi hiện tại để biểu đồ EvalGraph cập nhật mượt
+        setMoves((prev) => {
+          let changed = false;
+          const next = prev.map((m) => {
+            if (m.fenAfter === res.fen && m.winPercentWhite === undefined) {
+              changed = true;
+              return {
+                ...m,
+                cp: res.cp,
+                mate: res.mate,
+                winPercentWhite: res.win_percent_white,
+              };
+            }
+            return m;
+          });
+          return changed ? next : prev;
+        });
       })
       .catch((err) => {
         if (err.name !== 'AbortError') {
@@ -264,9 +860,17 @@ export const App: React.FC = () => {
       });
 
     return () => controller.abort();
-  }, [currentFen, depth, multipv, activeTab, analysisEnabled]);
+  }, [
+    currentFen,
+    depth,
+    multipv,
+    activeTab,
+    analysisEnabled,
+    isSpectator,
+    phase,
+  ]);
 
-  // Phát hiện kết thúc ván
+  // Phát hiện kết thúc ván trên bàn cờ
   useEffect(() => {
     if (phase !== 'playing') return;
     if (currentPly !== moves.length) return;
@@ -276,13 +880,32 @@ export const App: React.FC = () => {
       setPhase('finished');
       setShowGameOver(true);
       setHintArrow(null);
+
+      if (activeMatch && activeMatch.status === 'playing' && !isSpectator) {
+        finishMatchApi(activeMatch.id, info.result, info.reason)
+          .then((res) => {
+            setActiveMatch(res.match);
+            if (currentUser) {
+              fetchMeApi().then(setCurrentUser).catch(() => {});
+            }
+          })
+          .catch((err) => console.error('Lỗi lưu kết quả ván đấu:', err));
+      }
     }
-  }, [phase, currentFen, currentPly, moves.length]);
+  }, [
+    phase,
+    currentFen,
+    currentPly,
+    moves.length,
+    activeMatch,
+    isSpectator,
+    currentUser,
+  ]);
 
   // Phím tắt điều hướng ván cờ: ← → Home End
   useEffect(() => {
     const onKeydown = (e: KeyboardEvent) => {
-      if (activeTab !== 'play') return;
+      if (screen !== 'match' || activeTab !== 'play') return;
       const target = e.target as HTMLElement | null;
       if (
         target &&
@@ -308,19 +931,26 @@ export const App: React.FC = () => {
     };
     window.addEventListener('keydown', onKeydown);
     return () => window.removeEventListener('keydown', onKeydown);
-  }, [activeTab, moves.length]);
+  }, [screen, activeTab, moves.length]);
 
   // ------------------ Nước đi ------------------
 
   const executeMove = useCallback(
-    (fromSq: string, toSq: string, promotion: string = 'q'): boolean => {
-      if (phase !== 'playing') return false;
+    (
+      fromSq: string,
+      toSq: string,
+      promotion: string = 'q',
+      basePlyOverride?: number
+    ): boolean => {
+      if (phase !== 'playing' || isSpectator) return false;
+      if (activeMatch?.status === 'waiting') return false;
 
+      const targetPly = basePlyOverride !== undefined ? basePlyOverride : currentPly;
       let baseMoves = moves;
       let baseFen = currentFen;
-      if (currentPly < moves.length) {
-        baseMoves = moves.slice(0, currentPly);
-        baseFen = currentPly === 0 ? initialFen : baseMoves[currentPly - 1].fenAfter;
+      if (targetPly < moves.length) {
+        baseMoves = moves.slice(0, targetPly);
+        baseFen = targetPly === 0 ? initialFen : baseMoves[targetPly - 1].fenAfter;
       }
 
       const game = new Chess(baseFen);
@@ -340,6 +970,9 @@ export const App: React.FC = () => {
       const uci = `${moveObj.from}${moveObj.to}${moveObj.promotion || ''}`;
       const fenAfter = game.fen();
       const moverTurn = moveObj.color;
+      const now = Date.now();
+      const timeSpentMs = Math.max(50, now - lastTurnStartRef.current);
+      lastTurnStartRef.current = now;
 
       const newRecord: MoveRecord = {
         ply: newPly,
@@ -359,14 +992,65 @@ export const App: React.FC = () => {
       setSelectedSquare(null);
       setHintArrow(null);
 
-      // Chỉ chấm điểm nước ngay khi mức phân tích cho phép
+      // Cộng increment đồng hồ Fischer phía client
+      let nextMoverClock: number | null = null;
+      if (activeMatch && activeMatch.initial_time_ms != null) {
+        const inc = activeMatch.increment_ms || 0;
+        if (moverTurn === 'w') {
+          nextMoverClock = Math.max(
+            0,
+            (whiteClockMs ?? activeMatch.initial_time_ms) + inc
+          );
+          setWhiteClockMs(nextMoverClock);
+        } else {
+          nextMoverClock = Math.max(
+            0,
+            (blackClockMs ?? activeMatch.initial_time_ms) + inc
+          );
+          setBlackClockMs(nextMoverClock);
+        }
+      }
+
+      // Đồng bộ nước đi lên Backend DB nếu ván đấu thuộc DB
+      if (activeMatch && activeMatch.status === 'playing') {
+        const moverUserId =
+          moverTurn === 'w' ? activeMatch.white_user_id : activeMatch.black_user_id;
+        appendMatchMoveApi(activeMatch.id, {
+          player_user_id: moverUserId,
+          uci,
+          fen_before: baseFen,
+          time_spent_ms: timeSpentMs,
+          clock_after_ms: nextMoverClock,
+        }).catch((err) => console.error('Lỗi đồng bộ nước đi lên DB:', err));
+      }
+
+      // Tận dụng kết quả phân tích sẵn có của thế cờ trước nước đi để tiết kiệm 1 lượt gọi Stockfish (ISS-05)
       if (visibility.classifyLive) {
+        const prevMove = baseMoves[baseMoves.length - 1];
+        const cachedBeforeWin =
+          analysis?.fen === baseFen
+            ? analysis.win_percent_white
+            : prevMove?.winPercentWhite;
+        const cachedBestUci =
+          analysis?.fen === baseFen
+            ? analysis.lines[0]?.move_uci ?? null
+            : undefined;
+        const cachedBestSan =
+          analysis?.fen === baseFen
+            ? analysis.lines[0]?.move_san ?? null
+            : undefined;
+
         classifySingleMove({
           fen_before: baseFen,
           move_uci: uci,
           depth: 11,
+          before_win_percent_white: cachedBeforeWin,
+          best_move_uci: cachedBestUci,
+          best_move_san: cachedBestSan,
         })
           .then((cls) => {
+            const canonicalColor =
+              CLASSIFICATION_META[cls.classification]?.color || cls.color;
             setMoves((prev) =>
               prev.map((m) =>
                 m.ply === newPly && m.uci === uci
@@ -377,7 +1061,7 @@ export const App: React.FC = () => {
                       winPercentWhite: cls.after_analysis.win_percent_white,
                       classification: cls.classification,
                       symbol: cls.symbol,
-                      color: cls.color,
+                      color: canonicalColor,
                       bestMoveUci: cls.best_move_uci,
                       bestMoveSan: cls.best_move_san,
                       accuracy: cls.accuracy,
@@ -398,16 +1082,36 @@ export const App: React.FC = () => {
 
       return true;
     },
-    [moves, currentPly, currentFen, initialFen, phase, visibility.classifyLive, pushToast]
+    [
+      moves,
+      currentPly,
+      currentFen,
+      initialFen,
+      phase,
+      isSpectator,
+      activeMatch,
+      whiteClockMs,
+      blackClockMs,
+      visibility.classifyLive,
+      analysis,
+      pushToast,
+    ]
   );
 
   /**
-   * Thực hiện nước đi với kiểm tra phong cấp: nếu tốt tới hàng cuối,
-   * mở hộp thoại chọn quân thay vì mặc định phong Hậu.
+   * Thực hiện nước đi của người dùng với kiểm tra lượt (chặn đi hộ AI / đối thủ Online)
+   * và hộp thoại chọn quân phong cấp.
    */
   const tryMove = useCallback(
     (fromSq: string, toSq: string): boolean => {
-      if (phase !== 'playing') return false;
+      if (phase !== 'playing' || isSpectator) return false;
+      if (activeMatch?.status === 'waiting') return false;
+      if (
+        (config.opponent === 'ai' || config.mode === 'online') &&
+        chessInstance.turn() !== playerColor
+      ) {
+        return false;
+      }
       const piece = chessInstance.get(fromSq as ChessSquare);
       if (piece && piece.type === 'p') {
         const lastRank = piece.color === 'w' ? '8' : '1';
@@ -418,14 +1122,23 @@ export const App: React.FC = () => {
       }
       return executeMove(fromSq, toSq, 'q');
     },
-    [chessInstance, executeMove, phase]
+    [
+      chessInstance,
+      config.opponent,
+      config.mode,
+      executeMove,
+      phase,
+      isSpectator,
+      activeMatch,
+      playerColor,
+    ]
   );
 
   // ------------------ AI ------------------
 
   const triggerAiMove = useCallback(
     async (fenToPlay: string) => {
-      if (!aiPlayer?.ai) return;
+      if (!aiPlayer?.ai || isSpectator) return;
       const checkGame = new Chess(fenToPlay);
       if (checkGame.isGameOver()) return;
 
@@ -451,13 +1164,13 @@ export const App: React.FC = () => {
         setIsAiThinking(false);
       }
     },
-    [aiPlayer, executeMove, pushToast]
+    [aiPlayer, isSpectator, executeMove, pushToast]
   );
 
-  // AI tự đi khi tới lượt (chỉ khi ván đang chơi)
+  // AI tự đi khi tới lượt (chỉ khi ván đang chơi ở màn hình Match)
   useEffect(() => {
-    if (activeTab !== 'play') return;
-    if (phase !== 'playing') return;
+    if (screen !== 'match' || activeTab !== 'play') return;
+    if (phase !== 'playing' || isSpectator) return;
     if (config.opponent !== 'ai') return;
     if (isAiThinking) return;
     if (currentPly !== moves.length) return;
@@ -477,8 +1190,10 @@ export const App: React.FC = () => {
       return () => clearTimeout(timer);
     }
   }, [
+    screen,
     activeTab,
     phase,
+    isSpectator,
     config.opponent,
     playerColor,
     currentFen,
@@ -505,7 +1220,7 @@ export const App: React.FC = () => {
       return true;
     }
 
-    if (isAiThinking) return false;
+    if (isAiThinking || isSpectator) return false;
     return tryMove(sourceSquare, targetSquare);
   };
 
@@ -527,7 +1242,7 @@ export const App: React.FC = () => {
       return;
     }
 
-    if (isAiThinking) return;
+    if (isAiThinking || isSpectator) return;
 
     if (selectedSquare) {
       if (selectedSquare === square) {
@@ -542,10 +1257,14 @@ export const App: React.FC = () => {
     }
 
     const pieceOnSq = chessInstance.get(square as ChessSquare);
+    const canControlSide =
+      (config.opponent !== 'ai' && config.mode !== 'online') ||
+      pieceOnSq?.color === playerColor;
     if (
       phase === 'playing' &&
       pieceOnSq &&
-      pieceOnSq.color === chessInstance.turn()
+      pieceOnSq.color === chessInstance.turn() &&
+      canControlSide
     ) {
       setSelectedSquare(square);
     } else {
@@ -553,14 +1272,26 @@ export const App: React.FC = () => {
     }
   };
 
-  const customArrows: Arrow[] = React.useMemo(() => {
+  // Mũi tên trên bàn cờ: khi ở ReviewScreen (reviewMode), ưu tiên hiển thị các nhánh thay thế từ thế cờ trước nước đang chọn (ISS-04)
+  const customArrows: Arrow[] = useMemo(() => {
     const out: Arrow[] = [];
-    if (
-      activeTab !== 'editor' &&
-      showArrows &&
-      visibility.arrows &&
-      analysis?.lines
-    ) {
+    if (activeTab === 'editor') return out;
+
+    if (reviewMode && reviewLines && reviewLines.length > 0) {
+      out.push(
+        ...reviewLines.map(
+          (line, idx) =>
+            [
+              line.from_square as Square,
+              line.to_square as Square,
+              ARROW_COLORS[idx] || ARROW_COLORS[0],
+            ] as Arrow
+        )
+      );
+      return out;
+    }
+
+    if (showArrows && visibility.arrows && analysis?.lines) {
       out.push(
         ...analysis.lines.map(
           (line, idx) =>
@@ -574,27 +1305,36 @@ export const App: React.FC = () => {
     }
     if (hintArrow) out.push(hintArrow);
     return out;
-  }, [activeTab, showArrows, visibility.arrows, analysis, hintArrow]);
+  }, [
+    activeTab,
+    reviewMode,
+    reviewLines,
+    showArrows,
+    visibility.arrows,
+    analysis,
+    hintArrow,
+  ]);
 
-  const customSquareStyles = React.useMemo(() => {
+  const customSquareStyles = useMemo(() => {
     const styles: Record<string, React.CSSProperties> = {};
     if (activeTab === 'editor') return styles;
 
-    // Highlight nước đi vừa thực hiện kèm màu phân loại (Best/Mistake/Blunder)
+    // Highlight nước đi vừa thực hiện kèm màu phân loại chuẩn semantic.ts (ISS-07)
     if (currentPly > 0 && moves[currentPly - 1]) {
       const last = moves[currentPly - 1];
-      styles[last.from] = { backgroundColor: 'rgba(180, 165, 115, 0.34)' };
+      const moveColor =
+        (last.classification && CLASSIFICATION_META[last.classification]?.color) ||
+        last.color;
+      styles[last.from] = { backgroundColor: squareOverlays.lastMoveFrom };
       styles[last.to] = {
-        backgroundColor: last.color
-          ? `${last.color}48`
-          : 'rgba(180, 165, 115, 0.48)',
+        backgroundColor: moveColor ? `${moveColor}48` : squareOverlays.lastMoveTo,
       };
     }
 
     // Highlight ô đang chọn và các chấm gợi ý nước đi hợp lệ
     if (selectedSquare) {
       styles[selectedSquare] = {
-        backgroundColor: 'rgba(90, 125, 105, 0.45)',
+        backgroundColor: squareOverlays.selected,
       };
       try {
         const legalMoves = chessInstance.moves({
@@ -605,8 +1345,8 @@ export const App: React.FC = () => {
           const hasPiece = chessInstance.get(m.to as ChessSquare);
           styles[m.to] = {
             background: hasPiece
-              ? 'radial-gradient(circle, transparent 60%, rgba(30, 35, 32, 0.42) 64%)'
-              : 'radial-gradient(circle, rgba(30, 35, 32, 0.36) 19%, transparent 21%)',
+              ? squareOverlays.legalCaptureRing
+              : squareOverlays.legalDot,
           };
         }
       } catch {
@@ -620,7 +1360,7 @@ export const App: React.FC = () => {
         for (const cell of row) {
           if (cell && cell.type === 'k' && cell.color === chessInstance.turn()) {
             styles[cell.square] = {
-              backgroundColor: 'rgba(190, 65, 65, 0.6)',
+              backgroundColor: squareOverlays.check,
             };
           }
         }
@@ -634,7 +1374,10 @@ export const App: React.FC = () => {
 
   const handleStartGame = () => {
     setGameOver(null);
-    setReviewResult(null);
+    resetReview();
+    setPlayers((prev) =>
+      alignPlayersWithColor(prev, playerColor, config.opponent)
+    );
     setCurrentPly(moves.length);
     setPhase('playing');
     setShowPreMatch(false);
@@ -647,6 +1390,10 @@ export const App: React.FC = () => {
   };
 
   const openPreMatch = () => {
+    if (isSpectator) {
+      setScreen('home');
+      return;
+    }
     if (phase === 'playing' && moves.length > 0) {
       if (
         !window.confirm(
@@ -655,16 +1402,22 @@ export const App: React.FC = () => {
       )
         return;
     }
+    setActiveMatch(null);
     setPhase('setup');
     setGameOver(null);
     setShowPreMatch(true);
   };
 
   const handleNewGame = () => {
+    setActiveMatch(null);
+    setIsSpectator(false);
+    setWhiteClockMs(null);
+    setBlackClockMs(null);
     setInitialFen(STARTING_FEN);
     setMoves([]);
     setCurrentPly(0);
-    setReviewResult(null);
+    resetReview();
+    setReviewMode(false);
     setGameOver(null);
     setSelectedSquare(null);
     setPendingPromo(null);
@@ -674,13 +1427,14 @@ export const App: React.FC = () => {
   };
 
   const handleRematch = () => {
-    setPlayers({ w: players.b, b: players.w });
     const nextColor = playerColor === 'w' ? 'b' : 'w';
-    setPlayerColor(nextColor);
-    setBoardOrientation(nextColor === 'w' ? 'white' : 'black');
+    handleChangePlayerColor(nextColor);
+    setActiveMatch(null);
+    setIsSpectator(false);
     setMoves([]);
     setCurrentPly(0);
-    setReviewResult(null);
+    resetReview();
+    setReviewMode(false);
     setGameOver(null);
     setSelectedSquare(null);
     setPendingPromo(null);
@@ -689,23 +1443,35 @@ export const App: React.FC = () => {
   };
 
   const handleResign = () => {
-    if (phase !== 'playing') return;
+    if (phase !== 'playing' || isSpectator) return;
     const resigning: 'w' | 'b' =
-      config.opponent === 'ai' ? playerColor : chessInstance.turn();
+      config.opponent === 'ai' || config.mode === 'online'
+        ? playerColor
+        : chessInstance.turn();
     const name = players[resigning].name;
     if (!window.confirm(`${name} đầu hàng?`)) return;
     const winner = resigning === 'w' ? 'b' : 'w';
+    const result = winner === 'w' ? '1-0' : '0-1';
     setGameOver({
-      result: winner === 'w' ? '1-0' : '0-1',
+      result,
       reason: 'Đầu hàng',
       winner,
     });
     setPhase('finished');
     setShowGameOver(true);
+
+    if (activeMatch && activeMatch.status === 'playing') {
+      finishMatchApi(activeMatch.id, result, 'resign')
+        .then((res) => {
+          setActiveMatch(res.match);
+          if (currentUser) fetchMeApi().then(setCurrentUser).catch(() => {});
+        })
+        .catch((err) => console.error('Lỗi lưu đầu hàng:', err));
+    }
   };
 
   const handleTakeback = () => {
-    if (!visibility.takeback || moves.length === 0) return;
+    if (!visibility.takeback || moves.length === 0 || isSpectator) return;
     const stepsBack =
       config.opponent === 'ai' &&
       chessInstance.turn() === playerColor &&
@@ -715,10 +1481,17 @@ export const App: React.FC = () => {
     const targetLen = Math.max(0, moves.length - stepsBack);
     setMoves((prev) => prev.slice(0, targetLen));
     setCurrentPly(targetLen);
+
+    if (activeMatch && activeMatch.status === 'playing') {
+      takebackMatchApi(activeMatch.id, targetLen).catch((err) =>
+        console.error('Lỗi đồng bộ takeback:', err)
+      );
+    }
   };
 
   const canHint =
     visibility.hints &&
+    !isSpectator &&
     phase === 'playing' &&
     !isAiThinking &&
     currentPly === moves.length &&
@@ -746,66 +1519,6 @@ export const App: React.FC = () => {
 
   // ------------------ Review & PGN ------------------
 
-  const handleRunGameReview = async () => {
-    if (moves.length === 0) return;
-    setIsReviewing(true);
-    setReviewProgress({ done: 0, total: moves.length });
-    try {
-      const start = await startGameReview({
-        initial_fen: initialFen,
-        moves_uci: moves.map((m) => m.uci),
-        depth: 11,
-      });
-
-      let result = null;
-      for (;;) {
-        await new Promise((r) => setTimeout(r, 500));
-        const job = await getReviewJob(start.job_id);
-        setReviewProgress(job.progress);
-        if (job.status === 'done' && job.result) {
-          result = job.result;
-          break;
-        }
-        if (job.status === 'error') {
-          throw new Error(job.error || 'Lỗi không xác định khi review');
-        }
-      }
-
-      const res = result;
-      setReviewResult(res);
-      setMoves((prev) =>
-        prev.map((m) => {
-          const reviewed = res.moves.find((rm) => rm.ply === m.ply);
-          if (!reviewed) return m;
-          return {
-            ...m,
-            cp: reviewed.cp,
-            mate: reviewed.mate,
-            winPercentWhite: reviewed.win_percent_white,
-            classification: reviewed.classification,
-            symbol: reviewed.symbol,
-            color: reviewed.color,
-            bestMoveUci: reviewed.best_move_uci,
-            bestMoveSan: reviewed.best_move_san,
-            accuracy: reviewed.accuracy,
-            winLoss: reviewed.win_loss,
-          };
-        })
-      );
-    } catch (err) {
-      console.error('Lỗi Game Review:', err);
-      pushToast(
-        `Game Review thất bại: ${
-          err instanceof Error ? err.message : 'lỗi không xác định'
-        }`,
-        'error'
-      );
-    } finally {
-      setIsReviewing(false);
-      setReviewProgress(null);
-    }
-  };
-
   const handleOpenReview = async (runIfNeeded = false) => {
     setReviewMode(true);
     setShowGameOver(false);
@@ -813,6 +1526,24 @@ export const App: React.FC = () => {
       await handleRunGameReview();
     }
   };
+
+  const handleTryAlternativeMove = useCallback(
+    (plyBefore: number, uci: string) => {
+      const from = uci.slice(0, 2);
+      const to = uci.slice(2, 4);
+      const promo = uci.length > 4 ? uci[4] : 'q';
+      setIsSpectator(false);
+      setActiveMatch(null);
+      setReviewMode(false);
+      setGameOver(null);
+      setShowGameOver(false);
+      setPhase('playing');
+      setTimeout(() => {
+        executeMove(from, to, promo, plyBefore);
+      }, 0);
+    },
+    [executeMove]
+  );
 
   const handleExportPgn = () => {
     if (moves.length === 0) {
@@ -830,14 +1561,21 @@ export const App: React.FC = () => {
   };
 
   const handleApplyCustomPosition = (fen: string, pgn?: string) => {
-    const finish = () => {
+    const finish = (targetTurn?: 'w' | 'b') => {
+      if (targetTurn) {
+        handleChangePlayerColor(targetTurn);
+      }
+      setActiveMatch(null);
+      setIsSpectator(false);
       setPhase('setup');
       setGameOver(null);
-      setReviewResult(null);
+      resetReview();
+      setReviewMode(false);
       setSelectedSquare(null);
       setPendingPromo(null);
       setShowPreMatch(true);
       setActiveTab('play');
+      setScreen('match');
     };
 
     if (pgn) {
@@ -875,21 +1613,62 @@ export const App: React.FC = () => {
       }
     }
 
+    let fenTurn: 'w' | 'b' = 'w';
+    try {
+      fenTurn = new Chess(fen).turn();
+    } catch {
+      // ignore
+    }
     setInitialFen(fen);
     setMoves([]);
     setCurrentPly(0);
     setEditorBoardMap(fenToBoardMap(fen));
-    finish();
+    finish(fenTurn);
   };
 
-  // ------------------ Render ------------------
+  const handleSelectStartingFen = (fen: string) => {
+    if (fen === initialFen) return;
+    if (moves.length > 0) {
+      if (
+        !window.confirm(
+          'Đổi thế cờ xuất phát sẽ xóa biên bản hiện tại và bắt đầu ván mới từ đầu. Tiếp tục?'
+        )
+      ) {
+        return;
+      }
+    }
+    handleApplyCustomPosition(fen);
+  };
+
+  // ------------------ Render Gate: Auth ------------------
+
+  if (authChecking) {
+    return (
+      <div className="min-h-screen w-screen bg-base text-ink flex items-center justify-center">
+        <div className="text-xs font-mono text-ink-3">
+          Đang xác thực phiên đăng nhập...
+        </div>
+      </div>
+    );
+  }
+
+  if (!currentUser) {
+    return (
+      <>
+        <LoginScreen onLogin={handleLogin} errorMessage={loginError} />
+        <Toasts toasts={toasts} onDismiss={dismissToast} />
+      </>
+    );
+  }
+
+  // ------------------ Render Main Shell ------------------
 
   const displayedPosition =
     activeTab === 'editor'
       ? `${boardMapToFenPlacement(editorBoardMap)} w KQkq - 0 1`
       : currentFen;
 
-  const themeColors = BOARD_THEMES[boardTheme];
+  const themeColors = boardTheme;
 
   const topSide = boardOrientation === 'white' ? 'b' : 'w';
   const bottomSide = boardOrientation === 'white' ? 'w' : 'b';
@@ -897,8 +1676,13 @@ export const App: React.FC = () => {
   const playerCardProps = (side: 'w' | 'b') => ({
     player: players[side],
     side,
-    isTurn: phase === 'playing' && chessInstance.turn() === side,
+    isTurn:
+      phase === 'playing' &&
+      activeMatch?.status !== 'waiting' &&
+      chessInstance.turn() === side,
     isThinking: isAiThinking && aiPlayer === players[side],
+    rating: side === 'w' ? whiteRating : blackRating,
+    clockMs: side === 'w' ? whiteClockMs : blackClockMs,
   });
 
   const capturedBarProps = (side: 'w' | 'b', dock: 'bottom' | 'top') => ({
@@ -910,107 +1694,134 @@ export const App: React.FC = () => {
   });
 
   return (
-    <div className="h-screen w-screen overflow-hidden bg-[#0c0c0e] text-zinc-200 flex flex-col select-none">
-      {/* Top Bar tối giản */}
-      <header className="h-11 shrink-0 border-b border-zinc-800/80 bg-[#111114] px-4 flex items-center justify-between gap-3">
+    <div className="min-h-screen md:h-screen w-screen overflow-y-auto md:overflow-hidden bg-base text-ink flex flex-col select-none">
+      {/* Global Top Bar (cao 44px / h-11) */}
+      <header className="h-11 shrink-0 border-b border-line bg-panel px-4 flex items-center justify-between gap-3">
         <div className="flex items-center gap-3 min-w-0">
-          <span className="text-xs font-semibold tracking-wide uppercase text-zinc-100">
-            TheChess
-          </span>
-
-          <span className="text-zinc-400">/</span>
-
-          <div className="flex items-center gap-2 truncate">
-            <span
-              className={`w-2 h-2 rounded-full shrink-0 border ${
-                chessInstance.turn() === 'w'
-                  ? 'bg-zinc-100 border-zinc-300'
-                  : 'bg-zinc-700 border-zinc-500'
-              }`}
-            />
-            <span className="text-xs text-zinc-400 truncate">
-              {activeTab === 'editor'
-                ? 'Thiết lập thế cờ tùy chỉnh'
-                : phase === 'setup'
-                ? 'Chuẩn bị ván đấu'
-                : chessInstance.isCheckmate()
-                ? `Chiếu hết · ${chessInstance.turn() === 'w' ? 'Đen' : 'Trắng'} thắng`
-                : chessInstance.isDraw()
-                ? 'Ván cờ hòa'
-                : `Lượt ${chessInstance.turn() === 'w' ? 'Trắng' : 'Đen'}${
-                    chessInstance.inCheck() ? ' · Chiếu!' : ''
-                  }`}
-            </span>
-          </div>
-        </div>
-
-        {/* Cụm công cụ phải tối giản */}
-        <div className="flex items-center gap-2 shrink-0">
-          {status?.stockfish_ready && (
-            <span className="hidden md:inline-block text-[11px] font-mono text-zinc-400 mr-1">
-              {modeLabel}
-              {phase === 'playing'
-                ? ` · ${ANALYSIS_LEVEL_LABELS[config.analysis].label}`
-                : ''}
-            </span>
-          )}
-
-          {/* Đổi màu bàn cờ dịu mắt */}
-          <select
-            value={boardTheme}
-            onChange={(e) => setBoardTheme(e.target.value as any)}
-            className="bg-zinc-950 border border-zinc-800/90 rounded px-2 py-1 text-[11px] text-zinc-400 focus:outline-none cursor-pointer"
-            title="Chất liệu bàn cờ"
+          <button
+            type="button"
+            onClick={() => setScreen('home')}
+            className="font-display text-sm font-semibold text-ink hover:text-accent tracking-tight transition cursor-pointer shrink-0"
+            title="Về Sảnh chính"
           >
-            <option value="stone">Bàn cờ: Đá trầm</option>
-            <option value="wood">Bàn cờ: Gỗ cổ điển</option>
-            <option value="graphite">Bàn cờ: Xám chì</option>
-          </select>
+            TheChess
+          </button>
 
-          {status?.presets && (
-            <select
-              onChange={(e) => {
-                const p: PresetPosition | undefined = status.presets.find(
-                  (item) => item.id === e.target.value
-                );
-                if (p) handleApplyCustomPosition(p.fen);
-              }}
-              defaultValue="standard"
-              className="bg-zinc-950 border border-zinc-800/90 rounded px-2.5 py-1 text-[11px] text-zinc-300 focus:outline-none cursor-pointer max-w-[190px] truncate"
-            >
-              {status.presets.map((p) => (
-                <option key={p.id} value={p.id} className="bg-zinc-900 text-zinc-200">
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          )}
-
-          <div className="inline-flex bg-zinc-950 p-0.5 rounded border border-zinc-800/90">
+          {/* Thanh điều hướng chính (Primary Navigation) đặt trực tiếp trên Topbar */}
+          <nav
+            aria-label="Điều hướng chính"
+            className="inline-flex items-center bg-inset p-0.5 rounded-md border border-line shrink-0"
+          >
             <button
-              onClick={() => setActiveTab('play')}
+              type="button"
+              onClick={() => setScreen('home')}
               className={`px-2.5 py-0.5 rounded-xs text-[11px] font-medium transition cursor-pointer ${
-                activeTab === 'play'
-                  ? 'bg-zinc-200 text-zinc-950'
-                  : 'text-zinc-400 hover:text-zinc-200'
+                screen === 'home'
+                  ? 'bg-accent text-accent-ink font-semibold'
+                  : 'text-ink-2 hover:text-ink'
+              }`}
+            >
+              Sảnh câu lạc bộ
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setActiveTab('play');
+                setScreen('match');
+              }}
+              className={`px-2.5 py-0.5 rounded-xs text-[11px] font-medium transition cursor-pointer ${
+                screen === 'match' && activeTab === 'play'
+                  ? 'bg-accent text-accent-ink font-semibold'
+                  : 'text-ink-2 hover:text-ink'
               }`}
             >
               Bàn đấu
             </button>
             <button
+              type="button"
               onClick={() => {
                 setEditorBoardMap(fenToBoardMap(currentFen));
                 setActiveTab('editor');
+                setScreen('match');
               }}
               className={`px-2.5 py-0.5 rounded-xs text-[11px] font-medium transition cursor-pointer ${
-                activeTab === 'editor'
-                  ? 'bg-zinc-200 text-zinc-950'
-                  : 'text-zinc-400 hover:text-zinc-200'
+                screen === 'match' && activeTab === 'editor'
+                  ? 'bg-accent text-accent-ink font-semibold'
+                  : 'text-ink-2 hover:text-ink'
               }`}
             >
               Xếp cờ
             </button>
+          </nav>
+
+          <span className="hidden sm:inline text-ink-3">/</span>
+
+          <div className="hidden sm:flex items-center gap-2 truncate">
+            {screen === 'home' ? (
+              <span className="text-xs text-ink-2 truncate">
+                Trực tiếp &amp; Tạo trận
+              </span>
+            ) : screen === 'admin' ? (
+              <span className="text-xs text-ink-2 truncate">
+                Quản trị tài khoản
+              </span>
+            ) : (
+              <>
+                <span
+                  className={`w-2 h-2 rounded-full shrink-0 border border-line-strong ${
+                    chessInstance.turn() === 'w' ? 'bg-sq-w' : 'bg-sq-b'
+                  }`}
+                />
+                <span className="text-xs text-ink-2 truncate">
+                  {activeTab === 'editor'
+                    ? 'Thiết lập thế cờ tùy chỉnh'
+                    : activeMatch?.status === 'waiting'
+                    ? `Phòng chờ #${activeMatch.room_code} · Đang đợi đối thủ`
+                    : isSpectator
+                    ? `Đang xem trực tiếp${
+                        activeMatch?.room_code
+                          ? ` #${activeMatch.room_code}`
+                          : ''
+                      }`
+                    : phase === 'setup'
+                    ? 'Chuẩn bị ván đấu'
+                    : chessInstance.isCheckmate()
+                    ? `Chiếu hết · ${
+                        chessInstance.turn() === 'w' ? 'Đen' : 'Trắng'
+                      } thắng`
+                    : chessInstance.isDraw()
+                    ? 'Ván cờ hòa'
+                    : `Lượt ${chessInstance.turn() === 'w' ? 'Trắng' : 'Đen'}${
+                        chessInstance.inCheck() ? ' · Chiếu!' : ''
+                      }`}
+                </span>
+              </>
+            )}
           </div>
+        </div>
+
+        {/* Cụm công cụ phải tối giản */}
+        <div className="flex items-center gap-2 shrink-0">
+          {screen === 'match' && status?.stockfish_ready && (
+            <span className="hidden md:inline-block text-[11px] font-mono text-ink-2 mr-1">
+              {isSpectator ? 'Khán giả · Live Eval' : modeLabel}
+              {!isSpectator && phase === 'playing'
+                ? ` · ${ANALYSIS_LEVEL_LABELS[config.analysis].label}`
+                : ''}
+            </span>
+          )}
+
+          {/* Giao diện & chất liệu bàn */}
+          <ThemePicker />
+
+          {/* Menu Tài khoản & Link Admin UI */}
+          <UserDropdownMenu
+            user={currentUser}
+            currentScreen={screen}
+            onNavigate={setScreen}
+            onOpenChangePassword={() => setShowPasswordModal(true)}
+            onLogout={handleLogout}
+          />
         </div>
       </header>
 
@@ -1021,227 +1832,350 @@ export const App: React.FC = () => {
         </div>
       )}
 
-      {/* Bố cục chính không cuộn */}
-      <div className="flex-1 min-h-0 w-full flex flex-col md:flex-row overflow-hidden">
-        {/* Vùng bàn cờ trung tâm */}
-        <div
-          ref={boardStageRef}
-          className="relative flex-1 min-w-0 min-h-0 h-full bg-[#0c0c0e] flex items-center justify-center p-4 overflow-hidden"
-        >
-          {activeTab === 'play' && (
-            /* 3 cột: bar quân bắt trái (đáy,=topSide) · cột giữa (tên + bàn + tên) · bar phải (đỉnh,=bottomSide) */
-            <div className="flex items-center gap-3">
-              <CapturedBar {...capturedBarProps(topSide, 'bottom')} />
+      {/* Màn hình 1: HOME SCREEN (Sảnh chính 2 cột) */}
+      {screen === 'home' && (
+        <HomeScreen
+          currentUser={currentUser}
+          presets={status?.presets || []}
+          lc0Ready={status?.lc0_binary_ready}
+          onOpenLiveMatch={handleOpenLiveMatch}
+          onJoinMatchByCodeOrId={handleJoinMatchByCodeOrId}
+          onCreateMatch={handleCreateMatchFromLobby}
+          onOpenHistoryMatchReview={handleOpenHistoryMatchReview}
+          onOpenBoardEditor={() => {
+            setEditorBoardMap(fenToBoardMap(currentFen));
+            setActiveTab('editor');
+            setScreen('match');
+          }}
+        />
+      )}
 
-              <div className="flex flex-col items-center gap-1.5">
-                {/* Trên: thẻ người chơi của bên ở trên bàn */}
-                <div style={{ width: boardSize }}>
-                  <PlayerCard {...playerCardProps(topSide)} />
+      {/* Màn hình 2: ADMIN SCREEN (Quản lý tài khoản & hệ thống) */}
+      {screen === 'admin' && (
+        <AdminScreen
+          currentUser={currentUser}
+          onOpenMatch={handleOpenLiveMatch}
+          onNotify={(msg, kind) => pushToast(msg, kind)}
+        />
+      )}
+
+      {/* Màn hình 3: MATCH SCREEN (Giao diện bàn cờ hiện tại) */}
+      {screen === 'match' && (
+        <div className="flex-1 min-h-0 w-full flex flex-col md:flex-row md:overflow-hidden">
+          {/* Vùng bàn cờ trung tâm — tận dụng tối đa chiều dọc */}
+          <div
+            ref={boardStageRef}
+            className="relative flex-1 min-w-0 min-h-[360px] md:min-h-0 md:h-full bg-base flex items-center justify-center px-2 py-1.5 overflow-hidden"
+          >
+            {activeTab === 'play' && (
+              /* Đối xứng 3 cột trên màn hình rộng: rail trái (bottomSide) · cột giữa (tên + bàn + tên) · rail phải (topSide) */
+              <div className="h-full flex items-center justify-center gap-2">
+                {showSideRails && (
+                  <div className="hidden sm:block">
+                    <CapturedBar {...capturedBarProps(bottomSide, 'bottom')} />
+                  </div>
+                )}
+
+                <div className="h-full flex flex-col items-center justify-center gap-1.5">
+                  {/* Trên: thẻ người chơi của bên ở trên bàn */}
+                  <div style={{ width: boardSize }} className="shrink-0">
+                    <PlayerCard
+                      {...playerCardProps(topSide)}
+                      capturedSymbols={
+                        !showSideRails
+                          ? capturedBarProps(topSide, 'top').symbols
+                          : undefined
+                      }
+                      materialDiff={
+                        !showSideRails
+                          ? capturedBarProps(topSide, 'top').diff
+                          : undefined
+                      }
+                    />
+                  </div>
+
+                  <div
+                    style={{ width: boardSize, height: boardSize }}
+                    className="relative rounded-md overflow-hidden shadow-2xl border border-line shrink-0"
+                  >
+                    <Chessboard
+                      id="TheChessStudioBoard"
+                      boardWidth={boardSize}
+                      position={displayedPosition}
+                      boardOrientation={boardOrientation}
+                      onPieceDrop={handlePieceDrop}
+                      onSquareClick={handleSquareClick}
+                      customArrows={customArrows}
+                      customSquareStyles={customSquareStyles}
+                      customPieces={cburnettPieces}
+                      customDarkSquareStyle={{ backgroundColor: themeColors.dark }}
+                      customLightSquareStyle={{ backgroundColor: themeColors.light }}
+                      animationDuration={160}
+                    />
+                    {pendingPromo && (
+                      <PromotionDialog
+                        color={chessInstance.turn()}
+                        onPick={(p) => {
+                          const pp = pendingPromo;
+                          setPendingPromo(null);
+                          if (pp) executeMove(pp.from, pp.to, p);
+                        }}
+                        onCancel={() => setPendingPromo(null)}
+                      />
+                    )}
+
+                    {/* Overlay Phòng chờ (Waiting Room) khi tạo trận đấu người trực tuyến */}
+                    {activeMatch?.status === 'waiting' && (
+                      <div className="absolute inset-0 z-20 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4">
+                        <div className="w-full max-w-xs bg-panel border border-line rounded-xl p-5 text-center shadow-2xl">
+                          <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-amber-500/15 text-amber-300 text-[10px] font-semibold uppercase tracking-wider mb-2">
+                            <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+                            Đang chờ đối thủ vào bàn
+                          </div>
+                          <div className="text-xs text-ink-2 mb-3">
+                            Gửi mã phòng bên dưới cho bạn bè để vào đấu trực tiếp:
+                          </div>
+                          <div className="font-mono text-2xl font-bold tracking-widest text-accent bg-inset border border-line rounded-lg py-2.5 mb-3 select-all">
+                            #{activeMatch.room_code}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                navigator.clipboard.writeText(
+                                  activeMatch.room_code || ''
+                                );
+                                pushToast(
+                                  `Đã sao chép mã phòng #${activeMatch.room_code}!`,
+                                  'success'
+                                );
+                              }}
+                              className="flex-1 py-2 rounded-lg bg-accent hover:opacity-90 text-accent-ink text-xs font-semibold transition cursor-pointer"
+                            >
+                              Sao chép mã phòng
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setScreen('home')}
+                              className="px-3 py-2 rounded-lg bg-inset hover:bg-card border border-line text-xs text-ink-2 hover:text-ink transition cursor-pointer"
+                            >
+                              Về sảnh
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Overlay khi ván chưa bắt đầu */}
+                    {phase === 'setup' && !showPreMatch && (
+                      <div className="absolute inset-0 z-10 bg-black/45 flex items-center justify-center">
+                        <button
+                          onClick={() => setShowPreMatch(true)}
+                          className="px-4 py-2.5 rounded-lg bg-accent hover:opacity-90 text-accent-ink text-xs font-semibold shadow-2xl transition cursor-pointer"
+                        >
+                          Chuẩn bị &amp; Bắt đầu ván đấu
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Nút mở lại tổng kết sau khi đóng modal */}
+                    {phase === 'finished' && !showGameOver && !reviewMode && (
+                      <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10">
+                        <button
+                          onClick={() => setShowGameOver(true)}
+                          className="px-3 py-1.5 rounded-lg bg-accent hover:opacity-90 text-accent-ink text-[11px] font-semibold shadow-2xl transition cursor-pointer"
+                        >
+                          Xem tổng kết ván đấu
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Dưới: thẻ người chơi của bên ở dưới bàn */}
+                  <div style={{ width: boardSize }} className="shrink-0">
+                    <PlayerCard
+                      {...playerCardProps(bottomSide)}
+                      capturedSymbols={
+                        !showSideRails
+                          ? capturedBarProps(bottomSide, 'bottom').symbols
+                          : undefined
+                      }
+                      materialDiff={
+                        !showSideRails
+                          ? capturedBarProps(bottomSide, 'bottom').diff
+                          : undefined
+                      }
+                    />
+                  </div>
                 </div>
 
+                {showSideRails && (
+                  <div className="hidden sm:block">
+                    <CapturedBar {...capturedBarProps(topSide, 'top')} />
+                  </div>
+                )}
+              </div>
+            )}
+
+            {activeTab === 'editor' && (
               <div
                 style={{ width: boardSize, height: boardSize }}
-                className="relative rounded-sm overflow-hidden shadow-2xl border border-zinc-800/90 shrink-0"
+                className="relative rounded-md overflow-hidden shadow-2xl border border-line shrink-0"
               >
-                  <Chessboard
-                    id="TheChessStudioBoard"
-                    boardWidth={boardSize}
-                    position={displayedPosition}
-                    boardOrientation={boardOrientation}
-                    onPieceDrop={handlePieceDrop}
-                    onSquareClick={handleSquareClick}
-                    customArrows={customArrows}
-                    customSquareStyles={customSquareStyles}
-                    customDarkSquareStyle={{ backgroundColor: themeColors.dark }}
-                    customLightSquareStyle={{ backgroundColor: themeColors.light }}
-                    animationDuration={160}
-                  />
-                  {pendingPromo && (
-                    <PromotionDialog
-                      color={chessInstance.turn()}
-                      onPick={(p) => {
-                        const pp = pendingPromo;
-                        setPendingPromo(null);
-                        if (pp) executeMove(pp.from, pp.to, p);
-                      }}
-                      onCancel={() => setPendingPromo(null)}
-                    />
-                  )}
-
-                  {/* Overlay khi ván chưa bắt đầu */}
-                  {phase === 'setup' && !showPreMatch && (
-                    <div className="absolute inset-0 z-10 bg-black/45 flex items-center justify-center">
-                      <button
-                        onClick={() => setShowPreMatch(true)}
-                        className="px-4 py-2.5 rounded-lg bg-zinc-100 hover:bg-white text-zinc-950 text-xs font-semibold shadow-2xl transition cursor-pointer"
-                      >
-                        ⚙ Chuẩn bị &amp; Bắt đầu ván đấu
-                      </button>
-                    </div>
-                  )}
-
-                  {/* Nút mở lại tổng kết sau khi đóng modal */}
-                  {phase === 'finished' && !showGameOver && !reviewMode && (
-                    <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10">
-                      <button
-                        onClick={() => setShowGameOver(true)}
-                        className="px-3 py-1.5 rounded-lg bg-zinc-100/95 hover:bg-white text-zinc-950 text-[11px] font-semibold shadow-2xl transition cursor-pointer"
-                      >
-                        🏆 Xem tổng kết ván đấu
-                      </button>
-                    </div>
-                  )}
-                </div>
-
-                {/* Dưới: thẻ người chơi của bên ở dưới bàn */}
-                <div style={{ width: boardSize }}>
-                  <PlayerCard {...playerCardProps(bottomSide)} />
-                </div>
+                <Chessboard
+                  id="TheChessStudioBoard"
+                  boardWidth={boardSize}
+                  position={displayedPosition}
+                  boardOrientation={boardOrientation}
+                  onPieceDrop={handlePieceDrop}
+                  onSquareClick={handleSquareClick}
+                  customPieces={cburnettPieces}
+                  customDarkSquareStyle={{ backgroundColor: themeColors.dark }}
+                  customLightSquareStyle={{ backgroundColor: themeColors.light }}
+                  animationDuration={160}
+                />
               </div>
+            )}
+          </div>
 
-              <CapturedBar {...capturedBarProps(bottomSide, 'top')} />
-            </div>
-          )}
-
-          {activeTab === 'editor' && (
-            <div
-              style={{ width: boardSize, height: boardSize }}
-              className="relative rounded-sm overflow-hidden shadow-2xl border border-zinc-800/90 shrink-0"
-            >
-              <Chessboard
-                id="TheChessStudioBoard"
-                boardWidth={boardSize}
-                position={displayedPosition}
-                boardOrientation={boardOrientation}
-                onPieceDrop={handlePieceDrop}
-                onSquareClick={handleSquareClick}
-                customDarkSquareStyle={{ backgroundColor: themeColors.dark }}
-                customLightSquareStyle={{ backgroundColor: themeColors.light }}
-                animationDuration={160}
+          {/* Cột công cụ bên phải — tự động mở rộng khi bật chế độ ReviewScreen (ISS-09) */}
+          <aside
+            className={`w-full ${
+              reviewMode
+                ? 'md:w-[460px] lg:w-[500px] xl:w-[560px]'
+                : 'md:w-[390px] lg:w-[430px] xl:w-[480px]'
+            } shrink-0 min-h-[420px] md:min-h-0 md:h-full border-t md:border-t-0 md:border-l border-line bg-panel flex flex-col overflow-hidden transition-[width] duration-200`}
+          >
+            {activeTab === 'editor' ? (
+              <BoardEditor
+                boardMap={editorBoardMap}
+                onUpdateBoardMap={setEditorBoardMap}
+                selectedTool={editorTool}
+                onSelectTool={setEditorTool}
+                presets={status?.presets || []}
+                onApplyPosition={handleApplyCustomPosition}
               />
-            </div>
-          )}
-        </div>
+            ) : reviewMode ? (
+              <>
+                <ReviewScreen
+                  onClose={() => setReviewMode(false)}
+                  moves={moves}
+                  currentPly={currentPly}
+                  onSelectPly={(ply) => setCurrentPly(ply)}
+                  reviewResult={reviewResult}
+                  isReviewing={isReviewing}
+                  reviewProgress={reviewProgress}
+                  onRunReview={handleRunGameReview}
+                  onUpdateReviewLines={setReviewLines}
+                  onTryAlternativeMove={handleTryAlternativeMove}
+                />
 
-        {/* Cột công cụ bên phải */}
-        <aside className="w-full md:w-[460px] xl:w-[540px] shrink-0 h-full border-l border-zinc-800/80 bg-[#111114] flex flex-col overflow-hidden">
-          {activeTab === 'editor' ? (
-            <BoardEditor
-              boardMap={editorBoardMap}
-              onUpdateBoardMap={setEditorBoardMap}
-              selectedTool={editorTool}
-              onSelectTool={setEditorTool}
-              presets={status?.presets || []}
-              onApplyPosition={handleApplyCustomPosition}
-            />
-          ) : reviewMode ? (
-            <>
-              <ReviewScreen
-                onClose={() => setReviewMode(false)}
-                moves={moves}
-                currentPly={currentPly}
-                onSelectPly={(ply) => setCurrentPly(ply)}
-                reviewResult={reviewResult}
-                isReviewing={isReviewing}
-                reviewProgress={reviewProgress}
-                onRunReview={handleRunGameReview}
-              />
-
-              <EvalGraph
-                moves={moves}
-                currentPly={currentPly}
-                onSelectPly={(ply) => setCurrentPly(ply)}
-                reviewResult={reviewResult}
-                isReviewing={isReviewing}
-                embedded
-              />
-            </>
-          ) : (
-            <>
-              <EnginePanel
-                phase={phase}
-                config={config}
-                visibility={visibility}
-                modeLabel={modeLabel}
-                onOpenConfig={openPreMatch}
-                onResign={handleResign}
-                onHint={handleHint}
-                canHint={canHint}
-                showEval={showEval}
-                onToggleEval={() => setShowEval((v) => !v)}
-                showArrows={showArrows}
-                onToggleArrows={() => setShowArrows((v) => !v)}
-                multipv={multipv}
-                onChangeMultipv={setMultipv}
-                depth={depth}
-                onChangeDepth={setDepth}
-                analysis={analysis}
-                isAnalyzing={isAnalyzing}
-                onPlaySuggestedMove={(uci) => {
-                  const from = uci.slice(0, 2);
-                  const to = uci.slice(2, 4);
-                  if (uci.length > 4) {
-                    executeMove(from, to, uci[4]);
-                  } else {
-                    tryMove(from, to);
-                  }
-                }}
-                onTriggerAiMoveNow={() => triggerAiMove(currentFen)}
-                isAiThinking={isAiThinking}
-              />
-
-              <MoveHistory
-                moves={moves}
-                currentPly={currentPly}
-                phase={phase}
-                canTakeback={visibility.takeback}
-                onSelectPly={(ply) => setCurrentPly(ply)}
-                onTakeback={handleTakeback}
-                onExportPgn={handleExportPgn}
-                onBranchFromHere={() => {
-                  setMoves((prev) => prev.slice(0, currentPly));
-                }}
-                onFlipBoard={() =>
-                  setBoardOrientation((o) => (o === 'white' ? 'black' : 'white'))
-                }
-                onSwitchSides={() => {
-                  const nextColor = playerColor === 'w' ? 'b' : 'w';
-                  setPlayerColor(nextColor);
-                  setBoardOrientation(nextColor === 'w' ? 'white' : 'black');
-                }}
-                onNewGame={handleNewGame}
-              />
-
-              {(phase !== 'playing' || config.analysis === 'full') && (
                 <EvalGraph
                   moves={moves}
                   currentPly={currentPly}
                   onSelectPly={(ply) => setCurrentPly(ply)}
                   reviewResult={reviewResult}
                   isReviewing={isReviewing}
-                  onRunReview={() => handleOpenReview(true)}
-                  onOpenReview={() => handleOpenReview(false)}
-                  canReview={visibility.reviewButton}
+                  embedded
                 />
-              )}
-            </>
-          )}
-        </aside>
-      </div>
+              </>
+            ) : (
+              <>
+                <EnginePanel
+                  phase={phase}
+                  config={config}
+                  visibility={visibility}
+                  modeLabel={isSpectator ? 'Đang xem trực tiếp' : modeLabel}
+                  onOpenConfig={openPreMatch}
+                  onResign={handleResign}
+                  onHint={handleHint}
+                  canHint={canHint}
+                  showEval={showEval}
+                  onToggleEval={() => setShowEval((v) => !v)}
+                  showArrows={showArrows}
+                  onToggleArrows={() => setShowArrows((v) => !v)}
+                  multipv={multipv}
+                  onChangeMultipv={setMultipv}
+                  depth={depth}
+                  onChangeDepth={setDepth}
+                  analysis={analysis}
+                  isAnalyzing={isAnalyzing}
+                  onPlaySuggestedMove={(uci) => {
+                    if (isSpectator) return;
+                    const from = uci.slice(0, 2);
+                    const to = uci.slice(2, 4);
+                    if (uci.length > 4) {
+                      executeMove(from, to, uci[4]);
+                    } else {
+                      tryMove(from, to);
+                    }
+                  }}
+                  onTriggerAiMoveNow={() => triggerAiMove(currentFen)}
+                  isAiThinking={isAiThinking}
+                />
 
-      {/* Màn chuẩn bị ván đấu */}
-      {activeTab === 'play' && (
+                <MoveHistory
+                  moves={moves}
+                  currentPly={currentPly}
+                  phase={phase}
+                  canTakeback={visibility.takeback}
+                  onSelectPly={(ply) => setCurrentPly(ply)}
+                  onTakeback={handleTakeback}
+                  onExportPgn={handleExportPgn}
+                  onBranchFromHere={() => {
+                    if (isSpectator) return;
+                    setMoves((prev) => prev.slice(0, currentPly));
+                  }}
+                  onFlipBoard={() =>
+                    setBoardOrientation((o) => (o === 'white' ? 'black' : 'white'))
+                  }
+                  onSwitchSides={() => {
+                    if (isSpectator) return;
+                    const nextColor = playerColor === 'w' ? 'b' : 'w';
+                    handleChangePlayerColor(nextColor);
+                  }}
+                  onNewGame={handleNewGame}
+                />
+
+                {(isSpectator ||
+                  phase !== 'playing' ||
+                  config.analysis === 'full') && (
+                  <EvalGraph
+                    moves={moves}
+                    currentPly={currentPly}
+                    onSelectPly={(ply) => setCurrentPly(ply)}
+                    reviewResult={reviewResult}
+                    isReviewing={isReviewing}
+                    onRunReview={() => handleOpenReview(true)}
+                    onOpenReview={() => handleOpenReview(false)}
+                    canReview={visibility.reviewButton}
+                  />
+                )}
+              </>
+            )}
+          </aside>
+        </div>
+      )}
+
+      {/* Màn chuẩn bị ván đấu (dùng khi tinh chỉnh sâu trong MatchScreen) */}
+      {screen === 'match' && activeTab === 'play' && (
         <PreMatchDialog
           open={showPreMatch && phase === 'setup'}
           config={config}
           players={players}
           playerColor={playerColor}
+          initialFen={initialFen}
+          presets={status?.presets || []}
           hasMoves={moves.length > 0}
+          lc0Ready={status?.lc0_binary_ready}
           onChangeConfig={setConfig}
           onChangePlayers={setPlayers}
-          onChangePlayerColor={(c) => {
-            setPlayerColor(c);
-            setBoardOrientation(c === 'w' ? 'white' : 'black');
+          onChangePlayerColor={handleChangePlayerColor}
+          onSelectStartingFen={handleSelectStartingFen}
+          onOpenBoardEditor={() => {
+            setEditorBoardMap(fenToBoardMap(currentFen));
+            setShowPreMatch(false);
+            setActiveTab('editor');
           }}
           onStart={handleStartGame}
           onClose={() => setShowPreMatch(false)}
@@ -1249,20 +2183,41 @@ export const App: React.FC = () => {
       )}
 
       {/* Modal kết thúc ván đấu */}
-      <GameOverDialog
-        open={showGameOver && !!gameOver}
-        gameOver={gameOver}
-        players={players}
-        accuracy={
-          reviewResult
-            ? { w: reviewResult.white_accuracy, b: reviewResult.black_accuracy }
-            : null
+      {screen === 'match' && (
+        <GameOverDialog
+          open={showGameOver && !!gameOver}
+          gameOver={gameOver}
+          players={players}
+          accuracy={
+            reviewResult
+              ? { w: reviewResult.white_accuracy, b: reviewResult.black_accuracy }
+              : activeMatch?.white_accuracy != null &&
+                activeMatch?.black_accuracy != null
+              ? {
+                  w: activeMatch.white_accuracy,
+                  b: activeMatch.black_accuracy,
+                }
+              : null
+          }
+          onNewGame={handleNewGame}
+          onRematch={handleRematch}
+          onAnalyze={() => handleOpenReview(true)}
+          onExportPgn={handleExportPgn}
+          onClose={() => setShowGameOver(false)}
+        />
+      )}
+
+      {/* Modal đổi mật khẩu (bắt buộc lần đầu hoặc chủ động từ UserDropdownMenu) */}
+      <ChangePasswordModal
+        open={currentUser.must_change_password || showPasswordModal}
+        mandatory={currentUser.must_change_password}
+        currentDisplayName={currentUser.display_name}
+        onSubmit={handlePasswordChange}
+        onClose={
+          currentUser.must_change_password
+            ? undefined
+            : () => setShowPasswordModal(false)
         }
-        onNewGame={handleNewGame}
-        onRematch={handleRematch}
-        onAnalyze={() => handleOpenReview(true)}
-        onExportPgn={handleExportPgn}
-        onClose={() => setShowGameOver(false)}
       />
 
       <Toasts toasts={toasts} onDismiss={dismissToast} />

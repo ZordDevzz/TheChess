@@ -7,19 +7,46 @@ FastAPI Backend cho TheChess:
 """
 import asyncio
 import os
+import socket
+import subprocess
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import chess
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from analyzer import classify_move
+from database import (
+    DatabaseManager,
+    create_quick_login_token,
+    create_session_token,
+)
 from engine_manager import engine_manager
+from models import (
+    AppendMoveRequest,
+    AuthResponse,
+    ChangePasswordRequest,
+    CreateMatchRequest,
+    CreateUserByAdminRequest,
+    FinishMatchRequest,
+    JoinMatchRequest,
+    LoginRequest,
+    MatchRecord,
+    MatchSummaryItem,
+    MatchWithDetailsResponse,
+    QuickLoginRequest,
+    SaveMatchReviewRequest,
+    TakebackMatchRequest,
+    UpdateUserByAdminRequest,
+    UserRecord,
+)
+
+db_manager = DatabaseManager()
 
 
 @asynccontextmanager
@@ -74,6 +101,9 @@ class ClassifyMoveRequest(BaseModel):
     fen_before: str
     move_uci: str
     depth: int = Field(default=12, ge=6, le=20)
+    before_win_percent_white: Optional[float] = Field(default=None, ge=0.0, le=100.0)
+    best_move_uci: Optional[str] = None
+    best_move_san: Optional[str] = None
 
 
 class GameReviewRequest(BaseModel):
@@ -203,12 +233,23 @@ async def classify_single_move(req: ClassifyMoveRequest) -> Dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(e))
 
     mover_is_white = board.turn == chess.WHITE
-    before_analysis = await engine_manager.analyze_position(
-        fen=req.fen_before, depth=req.depth, multipv=1, time_limit=0.35
-    )
-    best_line = before_analysis["lines"][0] if before_analysis["lines"] else None
-    best_uci = best_line["move_uci"] if best_line else None
-    best_san = best_line["move_san"] if best_line else None
+    if req.before_win_percent_white is not None:
+        before_win_w = req.before_win_percent_white
+        best_uci = req.best_move_uci
+        best_san = req.best_move_san
+        if best_uci and not best_san:
+            try:
+                best_san = board.san(chess.Move.from_uci(best_uci))
+            except ValueError:
+                best_san = None
+    else:
+        before_analysis = await engine_manager.analyze_position(
+            fen=req.fen_before, depth=req.depth, multipv=1, time_limit=0.35
+        )
+        before_win_w = before_analysis["win_percent_white"]
+        best_line = before_analysis["lines"][0] if before_analysis["lines"] else None
+        best_uci = best_line["move_uci"] if best_line else None
+        best_san = best_line["move_san"] if best_line else None
 
     board.push(move)
     fen_after = board.fen()
@@ -217,7 +258,7 @@ async def classify_single_move(req: ClassifyMoveRequest) -> Dict[str, Any]:
     )
 
     cls_data = classify_move(
-        win_pct_before_white=before_analysis["win_percent_white"],
+        win_pct_before_white=before_win_w,
         win_pct_after_white=after_analysis["win_percent_white"],
         mover_is_white=mover_is_white,
         played_uci=req.move_uci,
@@ -228,7 +269,7 @@ async def classify_single_move(req: ClassifyMoveRequest) -> Dict[str, Any]:
         "move_uci": req.move_uci,
         "best_move_uci": best_uci,
         "best_move_san": best_san,
-        "before_win_percent_white": before_analysis["win_percent_white"],
+        "before_win_percent_white": before_win_w,
         "after_analysis": after_analysis,
         **cls_data,
     }
@@ -240,19 +281,36 @@ async def classify_single_move(req: ClassifyMoveRequest) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 REVIEW_JOBS: Dict[str, Dict[str, Any]] = {}
 MAX_REVIEW_JOBS = 20
+MAX_CONCURRENT_REVIEWS = 2
 
 
 def _cleanup_old_jobs() -> None:
-    if len(REVIEW_JOBS) <= MAX_REVIEW_JOBS:
+    excess = len(REVIEW_JOBS) - MAX_REVIEW_JOBS
+    if excess <= 0:
         return
-    # Xóa các job xong lỗi / cũ nhất сначала
+    # Xóa các job đã hoàn tất / lỗi cũ nhất trước
     finished = [
         (job_id, job)
         for job_id, job in REVIEW_JOBS.items()
-        if job["status"] in ("done", "error")
+        if job["status"] in ("done", "error", "cancelled")
     ]
-    for job_id, _ in finished[: len(finished) - MAX_REVIEW_JOBS]:
+    for job_id, _ in finished[:excess]:
         REVIEW_JOBS.pop(job_id, None)
+
+
+def _enforce_concurrent_review_limit() -> None:
+    running = [
+        (job_id, job)
+        for job_id, job in REVIEW_JOBS.items()
+        if job["status"] == "running"
+    ]
+    while len(running) >= MAX_CONCURRENT_REVIEWS:
+        oldest_id, oldest_job = running.pop(0)
+        task = oldest_job.get("task")
+        if task and not task.done():
+            task.cancel()
+        oldest_job["status"] = "cancelled"
+        oldest_job["error"] = "Đã hủy do có yêu cầu Game Review mới."
 
 
 @app.post("/api/review-game")
@@ -264,6 +322,7 @@ async def review_game(req: GameReviewRequest) -> Dict[str, Any]:
     if not req.moves_uci:
         raise HTTPException(status_code=400, detail="Danh sách nước đi trống, không thể review.")
 
+    _enforce_concurrent_review_limit()
     job_id = uuid.uuid4().hex[:12]
     job: Dict[str, Any] = {
         "status": "running",
@@ -293,6 +352,9 @@ async def _run_review_job(job_id: str, req: GameReviewRequest) -> None:
         )
         job["result"] = result
         job["status"] = "done"
+    except asyncio.CancelledError:
+        job["status"] = "cancelled"
+        job["error"] = job.get("error") or "Job review đã bị hủy."
     except Exception as e:  # noqa: BLE001 - báo lỗi nguyên văn về cho client
         job["error"] = str(e)
         job["status"] = "error"
@@ -310,9 +372,22 @@ async def get_review_job(job_id: str) -> Dict[str, Any]:
     }
     if job["status"] == "done":
         resp["result"] = job["result"]
-    elif job["status"] == "error":
+    elif job["status"] in ("error", "cancelled"):
         resp["error"] = job["error"]
     return resp
+
+
+@app.delete("/api/review-game/{job_id}")
+async def cancel_review_job(job_id: str) -> Dict[str, Any]:
+    job = REVIEW_JOBS.get(job_id)
+    if job is None:
+        return {"job_id": job_id, "status": "not_found"}
+    task = job.get("task")
+    if task and not task.done():
+        task.cancel()
+    job["status"] = "cancelled"
+    job["error"] = "Đã hủy theo yêu cầu từ người dùng."
+    return {"job_id": job_id, "status": "cancelled"}
 
 
 @app.post("/api/validate-fen")
@@ -353,6 +428,441 @@ async def validate_fen(req: ValidateFenRequest) -> Dict[str, Any]:
         errors.append(f"Thế cờ không hợp lệ (Mã trạng thái: {status}).")
 
     return {"valid": False, "errors": errors}
+
+
+# ==============================================================================
+# AUTHENTICATION, LOBBY, MULTIPLAYER MATCHES & ADMIN API
+# ==============================================================================
+
+
+def _extract_bearer_token(authorization: Optional[str]) -> Optional[str]:
+    if not authorization:
+        return None
+    parts = authorization.strip().split(" ", 1)
+    if len(parts) == 2 and parts[0].lower() == "bearer":
+        return parts[1].strip()
+    return None
+
+
+def get_current_user(
+    authorization: Optional[str] = Header(default=None),
+) -> UserRecord:
+    token = _extract_bearer_token(authorization)
+    if not token:
+        raise HTTPException(status_code=401, detail="Chưa đăng nhập hoặc thiếu Bearer token.")
+    user = db_manager.verify_token_and_get_user(token, expected_purpose="session")
+    if not user:
+        raise HTTPException(
+            status_code=401,
+            detail="Phiên đăng nhập không hợp lệ, đã hết hạn hoặc đã bị thu hồi.",
+        )
+    return user
+
+
+def get_current_admin(user: UserRecord = Depends(get_current_user)) -> UserRecord:
+    if user.role != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Chỉ tài khoản Quản trị viên (Admin) mới có quyền truy cập chức năng này.",
+        )
+    return user
+
+
+@app.post("/api/auth/login", response_model=AuthResponse)
+async def login(req: LoginRequest) -> AuthResponse:
+    user = db_manager.authenticate_user(req.username, req.password)
+    if not user:
+        raise HTTPException(
+            status_code=401,
+            detail="Tên đăng nhập hoặc mật khẩu không đúng, hoặc tài khoản đã bị khóa.",
+        )
+    token = create_session_token(user)
+    return AuthResponse(token=token, user=user)
+
+
+@app.post("/api/auth/quick-login", response_model=AuthResponse)
+async def quick_login(req: QuickLoginRequest) -> AuthResponse:
+    user = db_manager.verify_token_and_get_user(
+        req.login_token.strip(), expected_purpose="quick_login"
+    )
+    if not user:
+        raise HTTPException(
+            status_code=401,
+            detail="Quick-Link đăng nhập không hợp lệ, đã hết hạn hoặc đã bị thu hồi.",
+        )
+    session_token = create_session_token(user)
+    return AuthResponse(token=session_token, user=user)
+
+
+@app.get("/api/auth/me", response_model=UserRecord)
+async def auth_me(user: UserRecord = Depends(get_current_user)) -> UserRecord:
+    return user
+
+
+@app.post("/api/auth/change-password", response_model=AuthResponse)
+async def change_password(
+    req: ChangePasswordRequest,
+    user: UserRecord = Depends(get_current_user),
+) -> AuthResponse:
+    updated = db_manager.change_own_password(
+        user.id, req.new_password, req.display_name
+    )
+    new_token = create_session_token(updated)
+    return AuthResponse(token=new_token, user=updated)
+
+
+@app.get("/api/lobby")
+async def get_lobby(
+    step_exhibition: bool = True,
+    user: UserRecord = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """
+    Trả về dữ liệu Sảnh chính (Home Screen):
+    - `waiting_matches`: Các phòng đang chờ bạn bè vào đấu (`waiting`).
+    - `live_matches`: Danh sách các trận đang diễn ra (`playing`).
+    - `featured_match`: Trận tiêu điểm đang stream trực tiếp (ưu tiên trận của người chơi;
+      nếu không có trận nào của người chơi đang diễn ra thì tự động tạo/đi tiếp trận AI vs AI gần Elo người xem).
+    - `my_history`: Lịch sử các ván đã kết thúc của người dùng hiện tại.
+    - `club_history`: Lịch sử các ván đã kết thúc của toàn câu lạc bộ.
+    - `bots`: Danh sách các tài khoản Bot AI để tạo trận.
+    - `stats`: Chỉ số tổng quan của hệ thống.
+    """
+    waiting = db_manager.list_match_summaries(statuses=["waiting"], limit=20)
+    live = db_manager.list_match_summaries(statuses=["playing"], limit=20)
+
+    human_live = [m for m in live if not m.is_system_exhibition]
+    featured: Optional[MatchSummaryItem] = None
+
+    if human_live:
+        # Ưu tiên trận mà chính user đang tham gia, nếu không thì lấy trận mới nhất của người chơi
+        my_live = [
+            m
+            for m in human_live
+            if m.match.white_user_id == user.id or m.match.black_user_id == user.id
+        ]
+        featured = my_live[0] if my_live else human_live[0]
+    else:
+        if step_exhibition:
+            featured = db_manager.ensure_or_step_exhibition_match(viewer_elo=user.rating)
+            live = db_manager.list_match_summaries(statuses=["playing"], limit=20)
+        elif live:
+            featured = live[0]
+
+    my_history = db_manager.list_match_summaries(
+        statuses=["finished"], user_id=user.id, limit=25
+    )
+    # Lịch sử toàn sảnh (ưu tiên các trận có ít nhất 1 người thật)
+    all_finished = db_manager.list_match_summaries(statuses=["finished"], limit=40)
+    club_history = [m for m in all_finished if not m.is_system_exhibition][:25]
+
+    all_users = db_manager.list_users(include_bots=True)
+    bots = [u for u in all_users if u.is_bot]
+    human_players = [u for u in all_users if not u.is_bot and u.is_active]
+    human_players.sort(
+        key=lambda u: (
+            1 if u.last_seen_at else 0,
+            u.last_seen_at or "",
+            u.rating,
+        ),
+        reverse=True,
+    )
+
+    return {
+        "waiting_matches": waiting,
+        "live_matches": live,
+        "featured_match": featured,
+        "my_history": my_history,
+        "club_history": club_history,
+        "online_players": human_players,
+        "bots": bots,
+        "stats": db_manager.get_system_stats(),
+    }
+
+
+@app.get("/api/users/{target_user_id}/profile")
+async def get_user_profile_endpoint(
+    target_user_id: str,
+    user: UserRecord = Depends(get_current_user),
+) -> Dict[str, Any]:
+    target = db_manager.get_user_by_id(target_user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="Không tìm thấy kỳ thủ.")
+    recent_matches = db_manager.list_match_summaries(
+        statuses=["playing", "waiting", "finished"],
+        user_id=target_user_id,
+        limit=15,
+    )
+    return {
+        "user": target,
+        "recent_matches": recent_matches,
+    }
+
+
+@app.post("/api/matches", response_model=MatchWithDetailsResponse)
+async def create_match_endpoint(
+    req: CreateMatchRequest,
+    user: UserRecord = Depends(get_current_user),
+) -> MatchWithDetailsResponse:
+    try:
+        created = db_manager.create_match(req)
+        details = db_manager.get_match_with_details(created.id)
+        assert details is not None
+        return details
+    except (KeyError, ValueError, PermissionError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/matches/join", response_model=MatchWithDetailsResponse)
+async def join_match_endpoint(
+    req: JoinMatchRequest,
+    user: UserRecord = Depends(get_current_user),
+) -> MatchWithDetailsResponse:
+    try:
+        joined = db_manager.join_waiting_match(req.room_code_or_id, user.id)
+        details = db_manager.get_match_with_details(joined.id)
+        assert details is not None
+        return details
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except (ValueError, PermissionError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/matches/{match_id}", response_model=MatchWithDetailsResponse)
+async def get_match_endpoint(
+    match_id: str,
+    user: UserRecord = Depends(get_current_user),
+) -> MatchWithDetailsResponse:
+    db_manager.step_exhibition_match_if_needed(match_id, min_interval_sec=1.4)
+    details = db_manager.get_match_with_details(match_id)
+    if not details:
+        raise HTTPException(status_code=404, detail="Không tìm thấy trận đấu.")
+    return details
+
+
+@app.post("/api/matches/{match_id}/move", response_model=MatchWithDetailsResponse)
+async def append_match_move_endpoint(
+    match_id: str,
+    req: AppendMoveRequest,
+    user: UserRecord = Depends(get_current_user),
+) -> MatchWithDetailsResponse:
+    try:
+        detail = db_manager.append_move(match_id, req)
+        board = chess.Board(detail.fen_after)
+        if board.is_game_over():
+            res = board.result()
+            if res in ("1-0", "0-1", "1/2-1/2"):
+                term = (
+                    "checkmate"
+                    if board.is_checkmate()
+                    else "stalemate"
+                    if board.is_stalemate()
+                    else "insufficient"
+                    if board.is_insufficient_material()
+                    else "threefold"
+                    if board.is_repetition(3)
+                    else "draw"
+                )
+                db_manager.complete_match(match_id, result=res, termination=term)
+        details = db_manager.get_match_with_details(match_id)
+        assert details is not None
+        return details
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/matches/{match_id}/takeback", response_model=MatchWithDetailsResponse)
+async def takeback_match_endpoint(
+    match_id: str,
+    req: TakebackMatchRequest,
+    user: UserRecord = Depends(get_current_user),
+) -> MatchWithDetailsResponse:
+    try:
+        db_manager.takeback_to_ply(match_id, req.target_ply)
+        details = db_manager.get_match_with_details(match_id)
+        assert details is not None
+        return details
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/matches/{match_id}/finish", response_model=MatchWithDetailsResponse)
+async def finish_match_endpoint(
+    match_id: str,
+    req: FinishMatchRequest,
+    user: UserRecord = Depends(get_current_user),
+) -> MatchWithDetailsResponse:
+    try:
+        db_manager.complete_match(match_id, result=req.result, termination=req.termination)
+        details = db_manager.get_match_with_details(match_id)
+        assert details is not None
+        return details
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/matches/{match_id}/save-review", response_model=MatchRecord)
+async def save_match_review_endpoint(
+    match_id: str,
+    req: SaveMatchReviewRequest,
+    user: UserRecord = Depends(get_current_user),
+) -> MatchRecord:
+    try:
+        return db_manager.save_match_review(
+            match_id=match_id,
+            white_accuracy=req.white_accuracy,
+            black_accuracy=req.black_accuracy,
+            review_summary=req.review_summary,
+            ply_evaluations=req.ply_evaluations,
+        )
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+# ------------------------------------------------------------------------------
+# ADMIN ENDPOINTS (Yêu cầu role == 'admin')
+# ------------------------------------------------------------------------------
+
+
+def get_lan_ip() -> str:
+    """
+    Tự động phát hiện địa chỉ IPv4 LAN thực của máy chủ (ưu tiên 192.168.x.x / 10.x.x.x)
+    để tạo đường dẫn Quick-Link chia sẻ cho các máy khác trong mạng nội bộ.
+    Có thể ghi đè qua biến môi trường `THECHESS_LAN_IP`.
+    """
+    env_ip = os.environ.get("THECHESS_LAN_IP", "").strip()
+    if env_ip:
+        return env_ip
+
+    candidates: List[str] = []
+
+    # Cách 1: Kiểm tra qua bảng định tuyến UDP socket
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("10.255.255.255", 1))
+            ip = s.getsockname()[0]
+            if ip and not ip.startswith("127."):
+                candidates.append(ip)
+    except Exception:
+        pass
+
+    # Cách 2: Lấy danh sách IPv4 qua `hostname -I` trên Linux
+    try:
+        out = subprocess.check_output(["hostname", "-I"], text=True, timeout=1.0)
+        for token in out.split():
+            if "." in token and not token.startswith("127."):
+                if token not in candidates:
+                    candidates.append(token)
+    except Exception:
+        pass
+
+    # Ưu tiên dải mạng LAN vật lý phổ biến (192.168.* hoặc 10.*), tránh cầu ảo docker0 (172.17.*)
+    for ip in candidates:
+        if ip.startswith("192.168.") or ip.startswith("10."):
+            return ip
+    for ip in candidates:
+        if not ip.startswith("172.17."):
+            return ip
+    return candidates[0] if candidates else "127.0.0.1"
+
+
+@app.get("/api/admin/overview")
+async def admin_overview(
+    admin: UserRecord = Depends(get_current_admin),
+) -> Dict[str, Any]:
+    users = db_manager.list_users(include_bots=True)
+    active_matches = db_manager.list_match_summaries(
+        statuses=["waiting", "setup", "playing"], limit=50
+    )
+    return {
+        "stats": db_manager.get_system_stats(),
+        "users": users,
+        "active_matches": active_matches,
+        "lan_ip": get_lan_ip(),
+    }
+
+
+@app.post("/api/admin/users")
+async def admin_create_user(
+    req: CreateUserByAdminRequest,
+    admin: UserRecord = Depends(get_current_admin),
+) -> Dict[str, Any]:
+    try:
+        created = db_manager.create_user_by_admin(admin.id, req)
+        quick_token = create_quick_login_token(created)
+        return {
+            "user": created,
+            "quick_login_token": quick_token,
+            "initial_password": req.password,
+            "lan_ip": get_lan_ip(),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Không tạo được tài khoản: {e}")
+
+
+@app.patch("/api/admin/users/{target_user_id}", response_model=UserRecord)
+async def admin_update_user(
+    target_user_id: str,
+    req: UpdateUserByAdminRequest,
+    admin: UserRecord = Depends(get_current_admin),
+) -> UserRecord:
+    try:
+        return db_manager.update_user_by_admin(admin.id, target_user_id, req)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/admin/users/{target_user_id}/quick-link")
+async def admin_generate_quick_link(
+    target_user_id: str,
+    admin: UserRecord = Depends(get_current_admin),
+) -> Dict[str, Any]:
+    target = db_manager.get_user_by_id(target_user_id)
+    if not target or target.is_bot:
+        raise HTTPException(status_code=404, detail="Không tìm thấy tài khoản người thật.")
+    quick_token = create_quick_login_token(target)
+    return {
+        "user": target,
+        "quick_login_token": quick_token,
+        "lan_ip": get_lan_ip(),
+    }
+
+
+@app.post("/api/admin/users/{target_user_id}/revoke", response_model=UserRecord)
+async def admin_revoke_user(
+    target_user_id: str,
+    deactivate: bool = False,
+    admin: UserRecord = Depends(get_current_admin),
+) -> UserRecord:
+    try:
+        return db_manager.revoke_user_sessions(
+            admin.id, target_user_id, deactivate=deactivate
+        )
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.post("/api/admin/matches/{match_id}/abort", response_model=MatchRecord)
+async def admin_abort_match(
+    match_id: str,
+    admin: UserRecord = Depends(get_current_admin),
+) -> MatchRecord:
+    try:
+        return db_manager.abort_match_by_admin(admin.id, match_id)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"

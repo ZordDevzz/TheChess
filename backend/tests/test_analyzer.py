@@ -153,3 +153,44 @@ class TestClassifyMove:
         res = classify_move(60.0, 50.0, True, "e2e4", "d1h5")
         for key in ("classification", "symbol", "color", "win_loss", "accuracy"):
             assert key in res
+
+    @pytest.mark.parametrize(
+        "loss,expected_color",
+        [
+            (1.0, "#34d399"),
+            (4.0, "#2dd4bf"),
+            (7.0, "#60a5fa"),
+            (12.0, "#facc15"),
+            (20.0, "#fb923c"),
+            (30.0, "#f87171"),
+        ],
+    )
+    def test_semantic_palette_colors_match_design_system(self, loss, expected_color):
+        res = classify_move(
+            win_pct_before_white=60.0,
+            win_pct_after_white=60.0 - loss,
+            mover_is_white=True,
+            played_uci="a1a2",
+            best_uci="h7h8q",
+        )
+        assert res["color"] == expected_color
+
+
+class TestReviewJobCleanup:
+    def test_cleanup_old_jobs_removes_exact_excess_finished_jobs(self):
+        from main import MAX_REVIEW_JOBS, REVIEW_JOBS, _cleanup_old_jobs
+
+        REVIEW_JOBS.clear()
+        # Tạo 15 job đã xong và 6 job đang chạy (tổng 21 = MAX_REVIEW_JOBS + 1)
+        for i in range(15):
+            REVIEW_JOBS[f"done_{i}"] = {"status": "done", "progress": {"done": 1, "total": 1}}
+        for i in range(6):
+            REVIEW_JOBS[f"run_{i}"] = {"status": "running", "progress": {"done": 0, "total": 1}}
+
+        assert len(REVIEW_JOBS) == MAX_REVIEW_JOBS + 1
+        _cleanup_old_jobs()
+        assert len(REVIEW_JOBS) == MAX_REVIEW_JOBS
+        assert "done_0" not in REVIEW_JOBS
+        assert "done_1" in REVIEW_JOBS
+        REVIEW_JOBS.clear()
+
