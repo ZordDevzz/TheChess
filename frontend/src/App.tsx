@@ -19,6 +19,7 @@ import {
   AppScreen,
   EngineStatus,
   GameConfig,
+  AssistantEngineConfig,
   GameOverInfo,
   GamePhase,
   MatchRecord,
@@ -217,6 +218,37 @@ const AppShell: React.FC<AppShellProps> = ({
   const [reviewLines, setReviewLines] = useState<PVLine[] | null>(null);
   const [hintArrow, setHintArrow] = useState<Arrow | null>(null);
   const [isAiThinking, setIsAiThinking] = useState(false);
+
+  // Engine trợ lý cho nút "AI đi" (training) & "Gợi ý" — cấu hình bởi người
+  // dùng trong EnginePanel, lưu localStorage để giữ giữa các phiên.
+  const [assistantEngine, setAssistantEngine] =
+    useState<AssistantEngineConfig>(() => {
+      try {
+        const raw = window.localStorage.getItem('thechess_assistant');
+        if (raw) {
+          const parsed = JSON.parse(raw) as AssistantEngineConfig;
+          if (
+            (parsed.engine === 'maia' || parsed.engine === 'stockfish') &&
+            Number.isFinite(parsed.elo)
+          ) {
+            return parsed;
+          }
+        }
+      } catch {
+        // ignore
+      }
+      return { engine: 'maia', elo: 1500 };
+    });
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        'thechess_assistant',
+        JSON.stringify(assistantEngine)
+      );
+    } catch {
+      // ignore
+    }
+  }, [assistantEngine]);
 
   // --- Board Editor ---
   const [editorBoardMap, setEditorBoardMap] = useState<Record<string, string>>(
@@ -917,8 +949,11 @@ const AppShell: React.FC<AppShellProps> = ({
   // ------------------ AI ------------------
 
   const triggerAiMove = useCallback(
-    async (fenToPlay: string) => {
-      if (!aiPlayer?.ai || isSpectator) return;
+    async (fenToPlay: string, engineOverride?: AssistantEngineConfig) => {
+      // Training: cho phép chỉ định engine trợ lý (do người dùng cấu hình);
+      // mặc định dùng bot của ván đấu (auto-move & vs_ai).
+      const ai = engineOverride ?? aiPlayer?.ai;
+      if (!ai || isSpectator) return;
       const checkGame = new Chess(fenToPlay);
       if (checkGame.isGameOver()) return;
 
@@ -926,8 +961,8 @@ const AppShell: React.FC<AppShellProps> = ({
       try {
         const res = await requestAIMove({
           fen: fenToPlay,
-          engine_type: aiPlayer.ai.engine,
-          elo: aiPlayer.ai.elo,
+          engine_type: ai.engine,
+          elo: ai.elo,
           move_time: 0.45,
         });
         const promo = res.move_uci.length > 4 ? res.move_uci[4] : 'q';
@@ -1333,22 +1368,35 @@ const AppShell: React.FC<AppShellProps> = ({
   const handleHint = useCallback(async () => {
     if (!canHint) return;
     try {
-      const res = await analyzePosition(currentFen, 12, 1);
-      const line = res.lines[0];
-      if (!line) {
-        pushToast('Không có gợi ý cho thế cờ này.', 'info');
-        return;
+      // Engine trợ lý do người dùng cấu hình: Maia (gợi ý kiểu người theo
+      // Elo) hoặc Stockfish (nước tối ưu).
+      let from: string;
+      let to: string;
+      if (assistantEngine.engine === 'maia') {
+        const res = await requestAIMove({
+          fen: currentFen,
+          engine_type: 'maia',
+          elo: assistantEngine.elo,
+          move_time: 0.45,
+        });
+        from = res.from_square;
+        to = res.to_square;
+      } else {
+        const res = await analyzePosition(currentFen, 12, 1);
+        const line = res.lines[0];
+        if (!line) {
+          pushToast('Không có gợi ý cho thế cờ này.', 'info');
+          return;
+        }
+        from = line.from_square;
+        to = line.to_square;
       }
-      setHintArrow([
-        line.from_square as Square,
-        line.to_square as Square,
-        HINT_ARROW_COLOR,
-      ]);
+      setHintArrow([from as Square, to as Square, HINT_ARROW_COLOR]);
       window.setTimeout(() => setHintArrow(null), 4000);
     } catch {
       pushToast('Không lấy được gợi ý từ engine.', 'error');
     }
-  }, [canHint, currentFen, pushToast]);
+  }, [canHint, currentFen, pushToast, assistantEngine]);
 
   // ------------------ Review & PGN ------------------
 
@@ -1972,8 +2020,12 @@ const AppShell: React.FC<AppShellProps> = ({
                       tryMove(from, to);
                     }
                   }}
-                  onTriggerAiMoveNow={() => triggerAiMove(currentFen)}
+                  onTriggerAiMoveNow={() =>
+                    triggerAiMove(currentFen, assistantEngine)
+                  }
                   isAiThinking={isAiThinking}
+                  assistant={assistantEngine}
+                  onChangeAssistant={setAssistantEngine}
                 />
 
                 <MoveHistory

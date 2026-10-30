@@ -118,10 +118,31 @@ test('resolveFeatureVisibility: ván local vs_ai mở đủ công cụ thao tác
   assert.equal(vis.switchSides, true);
   assert.equal(vis.branchFromHere, true);
   assert.equal(vis.newGame, true);
-  assert.equal(vis.triggerAiMove, true);
+  assert.equal(vis.triggerAiMove, false); // chỉ training mới có "AI đi"
   assert.equal(vis.resign, true);
   assert.equal(vis.playSuggestedMove, true);
   assert.equal(vis.evalGraph, true);
+});
+
+test('resolveFeatureVisibility: training là nơi duy nhất có nút "AI đi"', () => {
+  const training: GameConfig = {
+    mode: 'training',
+    analysis: 'full',
+    allowTakeback: true,
+    allowHints: true,
+    opponent: 'ai',
+  };
+  const vis = resolveFeatureVisibility(training, 'playing');
+  assert.equal(vis.triggerAiMove, true);
+  // Kết thúc ván thì ẩn (không còn nước để AI đi)
+  assert.equal(resolveFeatureVisibility(training, 'finished').triggerAiMove, false);
+  // Server vs_ai (từ Sảnh) không được nhờ engine đi thay mình
+  const vsAiServer: GameConfig = { ...training, mode: 'vs_ai' };
+  assert.equal(
+    resolveFeatureVisibility(vsAiServer, 'playing', { isServerMatch: true })
+      .triggerAiMove,
+    false
+  );
 });
 
 test('resolveFeatureVisibility: ván server (online) khóa công cụ can thiệp cấu trúc ván', () => {

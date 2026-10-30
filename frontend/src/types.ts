@@ -171,6 +171,12 @@ export interface FeatureVisibilityContext {
   isServerMatch?: boolean;
 }
 
+/** Engine trợ lý cho nút "AI đi" (training) & "Gợi ý" — cấu hình bởi người dùng */
+export interface AssistantEngineConfig {
+  engine: 'maia' | 'stockfish';
+  elo: number;
+}
+
 export interface GameReviewResult {
   initial_fen: string;
   white_accuracy: number;

@@ -198,7 +198,9 @@ export function resolveFeatureVisibility(
     // Người chơi (kể cả training — dùng như cách nhanh kết thúc ván)
     resign: playing,
     playSuggestedMove: playing && arrows,
-    triggerAiMove: playing && config.opponent === 'ai',
+    // "AI đi" chỉ hợp lệ ở training (sandbox phân tích — nhờ AI đi hộ bất kỳ
+    // bên nào). vs_ai/online: ẩn hẳn để không thể nhờ engine đi thay mình.
+    triggerAiMove: playing && config.mode === 'training',
     openConfig: !isServerMatch,
     switchSides: !isServerMatch,
     branchFromHere: !isServerMatch,

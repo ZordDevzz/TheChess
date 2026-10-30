@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import {
   AnalysisResponse,
+  AssistantEngineConfig,
   FeatureVisibility,
   GameConfig,
   GamePhase,
@@ -40,6 +41,9 @@ interface EnginePanelProps {
   onPlaySuggestedMove: (uci: string) => void;
   onTriggerAiMoveNow: () => void;
   isAiThinking: boolean;
+  /** Engine trợ lý dùng cho nút "AI đi" (training) & "Gợi ý" */
+  assistant: AssistantEngineConfig;
+  onChangeAssistant: (next: AssistantEngineConfig) => void;
 }
 
 // Màu định hướng đồng bộ giữa danh sách MultiPV và mũi tên trên bàn cờ
@@ -99,6 +103,8 @@ export const EnginePanel: React.FC<EnginePanelProps> = ({
   onPlaySuggestedMove,
   onTriggerAiMoveNow,
   isAiThinking,
+  assistant,
+  onChangeAssistant,
 }) => {
   const [openEngineSettings, setOpenEngineSettings] = useState(false);
 
@@ -158,6 +164,17 @@ export const EnginePanel: React.FC<EnginePanelProps> = ({
               <Settings className="w-3 h-3" />
             </button>
           )}
+          <button
+            onClick={() => setOpenEngineSettings((v) => !v)}
+            className={`p-1.5 rounded-md border transition cursor-pointer ${
+              openEngineSettings
+                ? 'bg-card border-line-strong text-ink'
+                : 'bg-inset hover:bg-card border-line text-ink-2'
+            }`}
+            title="Cấu hình engine (trợ lý AI đi & Gợi ý, thông số phân tích)"
+          >
+            <SlidersHorizontal className="w-3 h-3" />
+          </button>
         </div>
       </div>
 
@@ -209,19 +226,6 @@ export const EnginePanel: React.FC<EnginePanelProps> = ({
                     Mũi tên
                   </button>
                 )}
-                {visibility.arrows && (
-                  <button
-                    onClick={() => setOpenEngineSettings((v) => !v)}
-                    className={`p-1 rounded border transition cursor-pointer ${
-                      openEngineSettings
-                        ? 'bg-card border-line-strong text-ink'
-                        : 'bg-transparent border-line text-ink-2 hover:text-ink-2'
-                    }`}
-                    title="Cài đặt thông số phân tích"
-                  >
-                    <SlidersHorizontal className="w-3 h-3" />
-                  </button>
-                )}
               </div>
             </div>
 
@@ -257,10 +261,10 @@ export const EnginePanel: React.FC<EnginePanelProps> = ({
           </div>
 
           {/* Popover chỉnh MultiPV & Depth */}
-          {openEngineSettings && visibility.arrows && (
+          {openEngineSettings && (
             <div className="absolute left-3 right-3 top-20 z-30 bg-overlay border border-line-strong rounded-lg shadow-2xl p-3.5 space-y-3 text-xs">
               <div className="flex items-center justify-between border-b border-line pb-1.5">
-                <span className="font-medium text-ink">Thông số phân tích</span>
+                <span className="font-medium text-ink">Cấu hình engine</span>
                 <button
                   onClick={() => setOpenEngineSettings(false)}
                   className="text-ink-2 hover:text-ink cursor-pointer"
@@ -268,34 +272,105 @@ export const EnginePanel: React.FC<EnginePanelProps> = ({
                   Đóng
                 </button>
               </div>
-              <div>
-                <div className="flex justify-between text-ink-2 mb-1 text-xs">
-                  <span>Số nhánh (MultiPV)</span>
-                  <span className="font-mono text-ink">{multipv}</span>
+
+              {/* Engine trợ lý — dùng cho nút "AI đi" (training) & "Gợi ý" */}
+              <div className="space-y-1.5">
+                <div className="flex justify-between text-ink-2">
+                  <span>Engine trợ lý (AI đi &amp; Gợi ý)</span>
+                  <span className="font-mono text-ink">
+                    {assistant.engine === 'stockfish'
+                      ? 'Stockfish'
+                      : `Maia ${assistant.elo}`}
+                  </span>
                 </div>
-                <input
-                  type="range"
-                  min={1}
-                  max={5}
-                  value={multipv}
-                  onChange={(e) => onChangeMultipv(Number(e.target.value))}
-                  className="w-full accent-accent cursor-pointer"
-                />
-              </div>
-              <div>
-                <div className="flex justify-between text-ink-2 mb-1 text-xs">
-                  <span>Độ sâu (Depth)</span>
-                  <span className="font-mono text-ink">{depth}</span>
+                <div className="flex gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onChangeAssistant({ ...assistant, engine: 'maia' })
+                    }
+                    className={`flex-1 px-2 py-1 rounded border transition cursor-pointer ${
+                      assistant.engine === 'maia'
+                        ? 'bg-card border-accent text-ink'
+                        : 'bg-transparent border-line text-ink-2 hover:text-ink'
+                    }`}
+                  >
+                    Maia
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onChangeAssistant({ ...assistant, engine: 'stockfish' })
+                    }
+                    className={`flex-1 px-2 py-1 rounded border transition cursor-pointer ${
+                      assistant.engine === 'stockfish'
+                        ? 'bg-card border-accent text-ink'
+                        : 'bg-transparent border-line text-ink-2 hover:text-ink'
+                    }`}
+                  >
+                    Stockfish
+                  </button>
                 </div>
-                <input
-                  type="range"
-                  min={8}
-                  max={22}
-                  value={depth}
-                  onChange={(e) => onChangeDepth(Number(e.target.value))}
-                  className="w-full accent-accent cursor-pointer"
-                />
+                {assistant.engine === 'maia' && (
+                  <div>
+                    <div className="flex justify-between text-ink-2 mb-1 text-xs">
+                      <span>Cường lực Maia (Elo)</span>
+                      <span className="font-mono text-ink">
+                        {assistant.elo}
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min={1100}
+                      max={1900}
+                      step={100}
+                      value={assistant.elo}
+                      onChange={(e) =>
+                        onChangeAssistant({
+                          ...assistant,
+                          elo: Number(e.target.value),
+                        })
+                      }
+                      className="w-full accent-accent cursor-pointer"
+                    />
+                  </div>
+                )}
               </div>
+
+              {visibility.arrows && (
+                <>
+                  <div className="border-t border-line pt-2 space-y-3">
+                    <div>
+                      <div className="flex justify-between text-ink-2 mb-1 text-xs">
+                        <span>Số nhánh (MultiPV)</span>
+                        <span className="font-mono text-ink">{multipv}</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={1}
+                        max={5}
+                        value={multipv}
+                        onChange={(e) => onChangeMultipv(Number(e.target.value))}
+                        className="w-full accent-accent cursor-pointer"
+                      />
+                    </div>
+                    <div>
+                      <div className="flex justify-between text-ink-2 mb-1 text-xs">
+                        <span>Độ sâu (Depth)</span>
+                        <span className="font-mono text-ink">{depth}</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={8}
+                        max={22}
+                        value={depth}
+                        onChange={(e) => onChangeDepth(Number(e.target.value))}
+                        className="w-full accent-accent cursor-pointer"
+                      />
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
           )}
 
