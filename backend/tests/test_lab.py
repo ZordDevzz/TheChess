@@ -199,6 +199,22 @@ def test_tournament_runs_all_matches_and_ranks(lab) -> None:
     assert total_points == 3.0  # 3 trận phân định thắng/thua
 
 
+def test_tournament_accepts_full_roster(lab) -> None:
+    """Regression: bot_ids từng bị giới hạn max_length=8 -> chọn cả roster
+    10 bot (Maia 1100-1900 + Stockfish) bị 422 Unprocessable Entity."""
+    _, db, _ = lab
+    usernames = [f"bot_maia_{elo}" for elo in range(1100, 2000, 100)] + [
+        "bot_stockfish"
+    ]
+    bots = [db.get_user_by_username(u) for u in usernames]
+    assert all(bots), f"thiếu bot trong roster: {usernames}"
+
+    req = LabCreateTournamentRequest(
+        name="Toàn roster", bot_ids=[b.id for b in bots]  # type: ignore[union-attr]
+    )
+    assert len(req.bot_ids) == 10
+
+
 def test_ensure_exhibition_creates_then_reuses(lab) -> None:
     manager, db, _ = lab
     first = asyncio.run(manager.ensure_exhibition(viewer_elo=1480))

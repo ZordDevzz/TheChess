@@ -51,6 +51,25 @@ function authHeaders(extra?: Record<string, string>): Record<string, string> {
   };
 }
 
+/**
+ * FastAPI trả detail 422 dạng mảng [{loc, msg, type}] (validation) hoặc string.
+ * Chuẩn hóa thành message đọc được cho toast.
+ */
+function detailToMessage(detail: unknown, fallback: string): string {
+  if (typeof detail === 'string') return detail;
+  if (Array.isArray(detail)) {
+    const parts = detail
+      .map((d) =>
+        d && typeof d === 'object' && 'msg' in d
+          ? String((d as { msg: unknown }).msg)
+          : null
+      )
+      .filter(Boolean);
+    if (parts.length) return parts.join('; ');
+  }
+  return fallback;
+}
+
 export async function fetchStatus(): Promise<EngineStatus> {
   const res = await fetch(`${API_BASE}/status`);
   if (!res.ok) throw new Error('Không thể kết nối tới Backend Engine');
@@ -554,7 +573,7 @@ export async function createLabMatchApi(params: {
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(err.detail || 'Không tạo được trận Lab.');
+    throw new Error(detailToMessage(err.detail, 'Không tạo được trận Lab.'));
   }
   return res.json();
 }
@@ -576,7 +595,7 @@ export async function createLabTournamentApi(params: {
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(err.detail || 'Không tạo được giải Lab.');
+    throw new Error(detailToMessage(err.detail, 'Không tạo được giải Lab.'));
   }
   return res.json();
 }

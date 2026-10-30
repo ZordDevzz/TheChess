@@ -312,5 +312,6 @@ class LabCreateMatchRequest(BaseModel):
 class LabCreateTournamentRequest(BaseModel):
     """Tạo giải round-robin giữa >= 2 bot (mỗi cặp đấu 1 lượt)."""
     name: str = Field(..., min_length=1, max_length=64)
-    bot_ids: List[str] = Field(..., min_length=2, max_length=8)
+    # Roster hiện có 10 bot (Maia 1100-1900 + Stockfish) — để dư room mở rộng.
+    bot_ids: List[str] = Field(..., min_length=2, max_length=12)
 
