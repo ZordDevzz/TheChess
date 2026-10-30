@@ -27,6 +27,7 @@ from database import (
     create_session_token,
 )
 from engine_manager import engine_manager
+from lab_manager import LabManager
 from models import (
     AppendMoveRequest,
     AuthResponse,
@@ -35,6 +36,8 @@ from models import (
     CreateUserByAdminRequest,
     FinishMatchRequest,
     JoinMatchRequest,
+    LabCreateMatchRequest,
+    LabCreateTournamentRequest,
     LoginRequest,
     MatchRecord,
     MatchSummaryItem,
@@ -49,9 +52,19 @@ from models import (
 db_manager = DatabaseManager()
 
 
+async def _match_ws_broadcast(match_id: str, event: str) -> None:
+    """Adapter: LabManager phát sự kiện qua registry WS của main."""
+    await match_ws_manager.broadcast(match_id, {"type": event, "match_id": match_id})
+
+
+lab_manager = LabManager(engine_manager, db_manager, _match_ws_broadcast)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    await lab_manager.start()
     yield
+    await lab_manager.shutdown()
     await engine_manager.shutdown()
 
 
@@ -645,8 +658,10 @@ async def get_lobby(
         ]
         featured = my_live[0] if my_live else human_live[0]
     else:
+        # Trận biểu diễn AI vs AI do LabManager chạy nền bằng engine thật
+        # (`step_exhibition=false` chỉ đọc, không tạo trận mới — dùng trong test).
         if step_exhibition:
-            featured = db_manager.ensure_or_step_exhibition_match(viewer_elo=user.rating)
+            featured = await lab_manager.ensure_exhibition(viewer_elo=user.rating)
             live = db_manager.list_match_summaries(statuses=["playing"], limit=20)
         elif live:
             featured = live[0]
@@ -732,19 +747,72 @@ async def join_match_endpoint(
         raise HTTPException(status_code=400, detail=str(e))
 
 
+# ---------------------------------------------------------------------------
+# Phòng Lab: tổ chức trận AI vs AI & giải round-robin (LabManager chạy nền)
+# ---------------------------------------------------------------------------
+
+
+@app.post("/api/lab/matches")
+async def create_lab_match_endpoint(
+    req: LabCreateMatchRequest,
+    user: UserRecord = Depends(get_current_user),
+) -> Dict[str, Any]:
+    try:
+        return await lab_manager.create_match(req)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/lab/matches")
+async def list_lab_matches_endpoint(
+    user: UserRecord = Depends(get_current_user),
+) -> Dict[str, Any]:
+    return lab_manager.list_matches()
+
+
+@app.post("/api/lab/tournaments")
+async def create_lab_tournament_endpoint(
+    req: LabCreateTournamentRequest,
+    user: UserRecord = Depends(get_current_user),
+) -> Dict[str, Any]:
+    try:
+        return await lab_manager.create_tournament(req, creator_user_id=user.id)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/lab/tournaments")
+async def list_lab_tournaments_endpoint(
+    user: UserRecord = Depends(get_current_user),
+) -> List[Dict[str, Any]]:
+    return lab_manager.list_tournaments()
+
+
+@app.get("/api/lab/tournaments/{tournament_id}")
+async def get_lab_tournament_endpoint(
+    tournament_id: str,
+    user: UserRecord = Depends(get_current_user),
+) -> Dict[str, Any]:
+    try:
+        return lab_manager.get_tournament(tournament_id)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
 @app.get("/api/matches/{match_id}", response_model=MatchWithDetailsResponse)
 async def get_match_endpoint(
     match_id: str,
     user: UserRecord = Depends(get_current_user),
 ) -> MatchWithDetailsResponse:
-    stepped = db_manager.step_exhibition_match_if_needed(match_id, min_interval_sec=1.4)
+    # Trận AI vs AI (Lab/exhibition) được LabManager đẩy nước trong task nền và
+    # broadcast WS riêng — GET chỉ thuần đọc.
     details = db_manager.get_match_with_details(match_id)
     if not details:
         raise HTTPException(status_code=404, detail="Không tìm thấy trận đấu.")
-    # Trận biểu diễn vừa tiến thêm nước -> phát event để khán giả refetch từng nước
-    # ngay (nước của người chơi qua /move đã được broadcast sẵn).
-    if stepped:
-        await _broadcast_match_event(match_id, "match_updated")
     return details
 
 

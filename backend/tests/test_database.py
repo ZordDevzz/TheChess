@@ -363,14 +363,7 @@ def test_quick_login_token_waiting_room_join_and_exhibition_stream(
     aborted = db.abort_match_by_admin(admin.id, joined.id)
     assert aborted.status == "aborted"
 
-    # Khi không còn trận nào đang playing -> Sảnh tự tạo và đi tiếp trận AI vs AI biểu diễn
-    ex_1 = db.ensure_or_step_exhibition_match(viewer_elo=1480)
-    assert ex_1.is_system_exhibition is True
-    assert ex_1.match.total_plies >= 2
-
-    db.step_exhibition_match_if_needed(ex_1.match.id, min_interval_sec=0.0)
-    details_after_step = db.get_match_with_details(ex_1.match.id)
-    assert details_after_step is not None
-    assert details_after_step.match.total_plies == ex_1.match.total_plies + 1
-    assert details_after_step.moves[-1].win_percent_white is not None
+    # Khi không còn trận nào đang playing: Sảnh đọc được trạng thái "không có
+    # trận bot-vs-bot nào" (việc tạo + chạy trận thuộc về LabManager — xem test_lab.py).
+    assert db.find_live_bot_match() is None
 

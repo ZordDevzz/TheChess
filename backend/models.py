@@ -292,3 +292,25 @@ class SaveMatchReviewRequest(BaseModel):
     review_summary: Dict[str, Any] = Field(default_factory=dict)
     ply_evaluations: List[Dict[str, Any]] = Field(default_factory=list)
 
+
+# ---------------------------------------------------------------------------
+# Phòng Lab (Lab): tổ chức trận AI vs AI & giải round-robin
+# (trận Lab dùng mode='vs_ai' với cả 2 bên là bot — không cần mode riêng,
+#  cờ `is_system_exhibition` đã nhận diện trận bot-vs-bot)
+# ---------------------------------------------------------------------------
+
+class LabCreateMatchRequest(BaseModel):
+    """Tạo 1 trận AI vs AI. Mỗi bên là 1 bot từ danh sách bot hệ thống."""
+    white_bot_id: str = Field(..., min_length=3, max_length=64)
+    black_bot_id: str = Field(..., min_length=3, max_length=64)
+    time_control_type: TimeControlType = "untimed"
+    initial_time_ms: Optional[int] = Field(default=None, ge=10_000)
+    increment_ms: int = Field(default=0, ge=0, le=60_000)
+    initial_fen: str = Field(default=STARTING_FEN, min_length=20, max_length=120)
+
+
+class LabCreateTournamentRequest(BaseModel):
+    """Tạo giải round-robin giữa >= 2 bot (mỗi cặp đấu 1 lượt)."""
+    name: str = Field(..., min_length=1, max_length=64)
+    bot_ids: List[str] = Field(..., min_length=2, max_length=8)
+

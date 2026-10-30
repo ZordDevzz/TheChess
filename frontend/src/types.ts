@@ -203,7 +203,7 @@ export interface GameReviewResult {
 // Multiplayer V3: User, Match, MatchDetail, Lobby & Admin
 // ---------------------------------------------------------------------------
 
-export type AppScreen = 'home' | 'match' | 'admin';
+export type AppScreen = 'home' | 'match' | 'admin' | 'lab';
 
 export type TimeControlType =
   | 'untimed'
@@ -364,5 +364,53 @@ export interface LobbyResponse {
   online_players: UserRecord[];
   bots: UserRecord[];
   stats: SystemStats;
+}
+
+// ---------------------------------------------------------------------------
+// Phòng Lab: tổ chức trận AI vs AI & giải round-robin
+// ---------------------------------------------------------------------------
+
+/** Trận AI vs AI trong Lab (match thường, cả 2 bên là bot) */
+export interface LabMatchListResponse {
+  live: MatchSummaryItem[];
+  recent: MatchSummaryItem[];
+}
+
+export interface LabScheduleSlot {
+  round: number;
+  white_bot_id: string;
+  black_bot_id: string;
+  match_id: string | null;
+  status?: string;
+  result: '1-0' | '0-1' | '1/2-1/2' | null;
+}
+
+export interface LabParticipant {
+  bot_id: string;
+  username: string;
+  label: string;
+  engine: 'maia' | 'stockfish';
+  elo: number;
+}
+
+export interface LabStanding {
+  bot_id: string;
+  label: string;
+  games: number;
+  wins: number;
+  draws: number;
+  losses: number;
+  points: number;
+}
+
+export interface LabTournament {
+  id: string;
+  name: string;
+  status: 'running' | 'finished' | 'aborted';
+  participants: LabParticipant[];
+  schedule: LabScheduleSlot[];
+  standings: LabStanding[];
+  created_at: string;
+  finished_at?: string | null;
 }
 

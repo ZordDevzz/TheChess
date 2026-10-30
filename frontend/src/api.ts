@@ -3,6 +3,8 @@ import {
   AnalysisResponse,
   EngineStatus,
   GameModeId,
+  LabMatchListResponse,
+  LabTournament,
   LobbyResponse,
   MatchRecord,
   MatchSummaryItem,
@@ -273,8 +275,7 @@ export async function fetchUserProfileApi(userId: string): Promise<{
   return res.json();
 }
 
-export async function createMatchApi(params: {
-  mode: GameModeId;
+export async function createMatchApi(params: {  mode: GameModeId;
   status: 'waiting' | 'setup' | 'playing';
   is_rated: boolean;
   white_user_id: string;
@@ -530,6 +531,69 @@ export async function adminAbortMatchApi(matchId: string): Promise<MatchRecord> 
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.detail || 'Không đóng được phòng đấu.');
+  }
+  return res.json();
+}
+
+// ---------------------------------------------------------------------------
+// Phòng Lab: trận AI vs AI & giải round-robin
+// ---------------------------------------------------------------------------
+
+export async function createLabMatchApi(params: {
+  white_bot_id: string;
+  black_bot_id: string;
+  time_control_type?: string;
+  initial_time_ms?: number | null;
+  increment_ms?: number;
+  initial_fen?: string;
+}): Promise<MatchWithDetailsResponse> {
+  const res = await fetch(`${API_BASE}/lab/matches`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify(params),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Không tạo được trận Lab.');
+  }
+  return res.json();
+}
+
+export async function listLabMatchesApi(): Promise<LabMatchListResponse> {
+  const res = await fetch(`${API_BASE}/lab/matches`, { headers: authHeaders() });
+  if (!res.ok) throw new Error('Không tải được danh sách trận Lab.');
+  return res.json();
+}
+
+export async function createLabTournamentApi(params: {
+  name: string;
+  bot_ids: string[];
+}): Promise<LabTournament> {
+  const res = await fetch(`${API_BASE}/lab/tournaments`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify(params),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Không tạo được giải Lab.');
+  }
+  return res.json();
+}
+
+export async function listLabTournamentsApi(): Promise<LabTournament[]> {
+  const res = await fetch(`${API_BASE}/lab/tournaments`, { headers: authHeaders() });
+  if (!res.ok) throw new Error('Không tải được danh sách giải Lab.');
+  return res.json();
+}
+
+export async function getLabTournamentApi(id: string): Promise<LabTournament> {
+  const res = await fetch(`${API_BASE}/lab/tournaments/${id}`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Không tải được giải Lab.');
   }
   return res.json();
 }

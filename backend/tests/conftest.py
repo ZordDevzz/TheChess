@@ -27,6 +27,9 @@ PLAYER_PASSWORD = "player-pass-123"
 os.environ["THECHESS_DB_PATH"] = str(Path(_DB_DIR) / "thechess_test.db")
 os.environ["THECHESS_SECRET_KEY"] = "integration-test-secret-key-do-not-use-in-prod"
 os.environ["THECHESS_ADMIN_PASSWORD"] = ADMIN_PASSWORD
+# Lab: runner chạy nền bằng engine thật — trong test tắt pacing để trận kết thúc nhanh.
+os.environ["THECHESS_LAB_PACING"] = "0,0"
+os.environ["THECHESS_LAB_MIN_MOVE"] = "0"
 
 # ---------------------------------------------------------------------------
 # 2) Import app SAU khi env đã sẵn sàng

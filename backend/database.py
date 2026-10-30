@@ -259,6 +259,19 @@ CREATE INDEX IF NOT EXISTS ix_match_black_created
 
 CREATE INDEX IF NOT EXISTS ix_match_status_created
     ON "match" (status, created_at DESC);
+
+-- Phòng Lab: giải đấu round-robin AI vs AI. Trận của giải là match thường
+-- (mode='vs_ai', cả 2 bên bot) được liên kết qua `schedule` JSON dưới đây.
+CREATE TABLE IF NOT EXISTS "lab_tournament" (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'running' CHECK (status IN ('running', 'finished', 'aborted')),
+    participants TEXT NOT NULL,
+    schedule TEXT NOT NULL,
+    created_by_user_id TEXT,
+    created_at TEXT NOT NULL,
+    finished_at TEXT
+);
 """
 
 
@@ -1982,201 +1995,90 @@ class DatabaseManager:
         win_pct = 50.0 + 50.0 * (2.0 / (1.0 + math.exp(-0.00368208 * cp)) - 1.0)
         return int(cp), round(max(0.5, min(99.5, win_pct)), 2)
 
-    def _step_single_exhibition_match(
-        self, m: MatchRecord, min_interval_sec: float = 0.0
-    ) -> bool:
-        """
-        Đi thêm 1 nước cho trận biểu diễn `m` nếu đủ khoảng thời gian `min_interval_sec`.
-        Trả về True nếu ván đấu đã kết thúc sau bước này, False nếu ván vẫn đang `playing`.
-        """
-        if m.status != "playing":
-            return True
+    # ------------------------------------------------------------------
+    # Phòng Lab: giải round-robin AI vs AI (trận đấu là match bot-vs-bot thường)
+    # ------------------------------------------------------------------
 
-        if min_interval_sec > 0 and m.last_move_at:
-            try:
-                last_dt = datetime.fromisoformat(m.last_move_at)
-                elapsed = (datetime.now(timezone.utc) - last_dt).total_seconds()
-                if elapsed < min_interval_sec:
-                    return False
-            except Exception:
-                pass
+    def create_lab_tournament(
+        self,
+        tid: str,
+        name: str,
+        participants: List[Dict[str, Any]],
+        schedule: List[Dict[str, Any]],
+        created_by_user_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Tạo giải Lab. `participants`/`schedule` lưu JSON; trả về bản ghi đã parse."""
+        now = utc_now_iso()
+        with self.connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO "lab_tournament" (id, name, status, participants, schedule, created_by_user_id, created_at)
+                VALUES (?, ?, 'running', ?, ?, ?, ?)
+                """,
+                (tid, name, json.dumps(participants), json.dumps(schedule), created_by_user_id, now),
+            )
+        rec = self.get_lab_tournament(tid)
+        assert rec is not None
+        return rec
 
-        board = chess.Board(m.current_fen)
-        if board.is_game_over() or m.total_plies >= 80:
-            res = board.result() if board.is_game_over() else "1/2-1/2"
-            if res not in ("1-0", "0-1", "1/2-1/2"):
-                res = "1/2-1/2"
-            self.complete_match(m.id, result=res, termination="exhibition_end")
-            return True
-
-        legal_moves = list(board.legal_moves)
-        if not legal_moves:
-            self.complete_match(m.id, result="1/2-1/2", termination="draw")
-            return True
-
-        center_squares = {
-            chess.E4,
-            chess.D4,
-            chess.E5,
-            chess.D5,
-            chess.C4,
-            chess.F3,
-            chess.C6,
-            chess.F6,
-        }
-        scored_moves: List[Tuple[float, chess.Move]] = []
-        for mv in legal_moves:
-            score = random.uniform(0.0, 1.0)
-            if board.is_capture(mv):
-                score += 2.5
-            if board.gives_check(mv):
-                score += 1.5
-            if mv.to_square in center_squares:
-                score += 1.2
-            if board.is_castling(mv):
-                score += 2.0
-            scored_moves.append((score, mv))
-        scored_moves.sort(key=lambda x: x[0], reverse=True)
-        chosen_move = scored_moves[0][1]
-
-        mover_id = m.white_user_id if board.turn == chess.WHITE else m.black_user_id
-        prev_clock = (
-            (m.white_clock_ms if board.turn == chess.WHITE else m.black_clock_ms)
-            or 600_000
-        )
-        spent = random.randint(1200, 2800)
-        next_clock = max(10_000, prev_clock - spent + m.increment_ms)
-
-        board_after = board.copy()
-        board_after.push(chosen_move)
-        est_cp, est_win = self._estimate_board_eval(board_after)
-
-        self.append_move(
-            m.id,
-            AppendMoveRequest(
-                player_user_id=mover_id,
-                uci=chosen_move.uci(),
-                time_spent_ms=spent,
-                clock_after_ms=next_clock,
-                cp=est_cp,
-                win_percent_white=est_win,
-            ),
-        )
-
-        if board_after.is_game_over():
-            res = board_after.result()
-            if res in ("1-0", "0-1", "1/2-1/2"):
-                self.complete_match(
-                    m.id,
-                    result=res,
-                    termination="checkmate" if board_after.is_checkmate() else "draw",
-                )
-                return True
-        return False
-
-    def step_exhibition_match_if_needed(
-        self, match_id: str, min_interval_sec: float = 1.4
-    ) -> bool:
-        """
-        Khi người dùng đang ở trong MatchScreen xem trực tiếp (`GET /api/matches/{match_id}`),
-        nếu bàn đang xem là trận biểu diễn AI vs AI đang `playing`, tự động đi tiếp nước cờ
-        để bàn cờ luôn sống động mà không phụ thuộc vào việc có ai đang mở màn hình Sảnh hay không.
-
-        Trả về True nếu ván đã tiến thêm nước (để endpoint broadcast WS cho khán giả).
-        """
+    def get_lab_tournament(self, tid: str) -> Optional[Dict[str, Any]]:
+        """Đọc 1 giải Lab, parse JSON participants/schedule. None nếu không tồn tại."""
         with self.read_connection() as conn:
-            m_row = conn.execute(
-                'SELECT * FROM "match" WHERE id = ?', (match_id,)
+            row = conn.execute(
+                'SELECT * FROM "lab_tournament" WHERE id = ?', (tid,)
             ).fetchone()
-            if not m_row or m_row["status"] != "playing":
-                return False
-            w_row = conn.execute(
-                'SELECT is_bot FROM "user" WHERE id = ?', (m_row["white_user_id"],)
-            ).fetchone()
-            b_row = conn.execute(
-                'SELECT is_bot FROM "user" WHERE id = ?', (m_row["black_user_id"],)
-            ).fetchone()
-            if not w_row or not b_row or not (w_row["is_bot"] and b_row["is_bot"]):
-                return False
-            match_obj = self._row_to_match(m_row)
-            plies_before = m_row["total_plies"]
+        if not row:
+            return None
+        return {
+            "id": row["id"],
+            "name": row["name"],
+            "status": row["status"],
+            "participants": json.loads(row["participants"]),
+            "schedule": json.loads(row["schedule"]),
+            "created_by_user_id": row["created_by_user_id"],
+            "created_at": row["created_at"],
+            "finished_at": row["finished_at"],
+        }
 
-        self._step_single_exhibition_match(match_obj, min_interval_sec=min_interval_sec)
+    def list_lab_tournaments(self, limit: int = 20) -> List[Dict[str, Any]]:
+        with self.read_connection() as conn:
+            rows = conn.execute(
+                'SELECT id FROM "lab_tournament" ORDER BY created_at DESC LIMIT ?',
+                (limit,),
+            ).fetchall()
+        out: List[Dict[str, Any]] = []
+        for r in rows:
+            rec = self.get_lab_tournament(r["id"])
+            if rec is not None:
+                out.append(rec)
+        return out
 
-        after = self.get_match_record(match_id)
-        return after is not None and after.total_plies != plies_before
+    def update_lab_tournament(
+        self,
+        tid: str,
+        schedule: Optional[List[Dict[str, Any]]] = None,
+        status: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Cập nhật schedule (gán match_id/kết quả từng trận) hoặc trạng thái giải."""
+        with self.connection() as conn:
+            if schedule is not None:
+                conn.execute(
+                    'UPDATE "lab_tournament" SET schedule = ? WHERE id = ?',
+                    (json.dumps(schedule), tid),
+                )
+            if status is not None:
+                finished_at = utc_now_iso() if status in ("finished", "aborted") else None
+                conn.execute(
+                    'UPDATE "lab_tournament" SET status = ?, finished_at = COALESCE(?, finished_at) WHERE id = ?',
+                    (status, finished_at, tid),
+                )
+        return self.get_lab_tournament(tid)
 
-    def ensure_or_step_exhibition_match(
-        self, viewer_elo: int = 1500
-    ) -> MatchSummaryItem:
-        """
-        Đảm bảo Sảnh luôn có ít nhất 1 trận biểu diễn giữa 2 Bot AI gần mức Elo của người đang xem
-        khi không có trận nào của người chơi đang diễn ra, và tự động đi tiếp 1 nước mỗi khi được poll (~3s).
-        """
-        nearest_w = min(MAIA_BOT_ELOS, key=lambda e: abs(e - viewer_elo))
-        candidates_b = [e for e in MAIA_BOT_ELOS if e != nearest_w]
-        nearest_b = min(candidates_b, key=lambda e: abs(e - (viewer_elo + 100)))
-
-        w_bot = self.get_user_by_username(f"bot_maia_{nearest_w}")
-        b_bot = self.get_user_by_username(f"bot_maia_{nearest_b}")
-        assert w_bot is not None and b_bot is not None
-
-        active = self.list_match_summaries(statuses=["playing"], limit=10)
-        exhibition: Optional[MatchSummaryItem] = None
+    def find_live_bot_match(self) -> Optional[MatchSummaryItem]:
+        """Trận AI vs AI đang `playing` gần nhất (cho Sảnh hiển thị tiêu điểm)."""
+        active = self.list_match_summaries(statuses=["playing"], limit=20)
         for item in active:
             if item.is_system_exhibition:
-                exhibition = item
-                break
-
-        if exhibition is None:
-            created = self.create_match(
-                CreateMatchRequest(
-                    mode="vs_ai",
-                    status="playing",
-                    is_rated=False,
-                    white_user_id=w_bot.id,
-                    black_user_id=b_bot.id,
-                    time_control_type="rapid",
-                    initial_time_ms=600_000,
-                    increment_ms=5_000,
-                    generate_room_code=True,
-                )
-            )
-            # Đi sẵn 2 nước khai cuộc để bàn cờ sống động ngay từ đầu
-            self.append_move(
-                created.id,
-                AppendMoveRequest(
-                    player_user_id=w_bot.id,
-                    uci=random.choice(["e2e4", "d2d4", "c2c4", "g1f3"]),
-                    time_spent_ms=1200,
-                    clock_after_ms=603_800,
-                    cp=25,
-                    win_percent_white=52.3,
-                ),
-            )
-            self.append_move(
-                created.id,
-                AppendMoveRequest(
-                    player_user_id=b_bot.id,
-                    uci=random.choice(["e7e5", "c7c5", "e7e6", "g8f6"]),
-                    time_spent_ms=1400,
-                    clock_after_ms=603_600,
-                    cp=15,
-                    win_percent_white=51.4,
-                ),
-            )
-            summaries = self.list_match_summaries(statuses=["playing"], limit=5)
-            return summaries[0]
-
-        ended = self._step_single_exhibition_match(
-            exhibition.match, min_interval_sec=1.2
-        )
-        if ended:
-            return self.ensure_or_step_exhibition_match(viewer_elo)
-
-        refreshed = self.list_match_summaries(statuses=["playing"], limit=10)
-        for item in refreshed:
-            if item.match.id == exhibition.match.id:
                 return item
-        return refreshed[0]
+        return None
 

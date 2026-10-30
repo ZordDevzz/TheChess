@@ -80,6 +80,9 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 const AdminScreen = React.lazy(() =>
   import('./components/AdminScreen').then((m) => ({ default: m.AdminScreen }))
 );
+const LabScreen = React.lazy(() =>
+  import('./components/LabScreen').then((m) => ({ default: m.LabScreen }))
+);
 const ReviewScreen = React.lazy(() =>
   import('./components/ReviewScreen').then((m) => ({ default: m.ReviewScreen }))
 );
@@ -1526,6 +1529,17 @@ const AppShell: React.FC<AppShellProps> = ({
             >
               Xếp cờ
             </button>
+            <button
+              type="button"
+              onClick={() => setScreen('lab')}
+              className={`px-2.5 py-0.5 rounded-xs text-[11px] font-medium transition cursor-pointer ${
+                screen === 'lab'
+                  ? 'bg-accent text-accent-ink font-semibold'
+                  : 'text-ink-2 hover:text-ink'
+              }`}
+            >
+              Phòng Lab
+            </button>
           </nav>
 
           <span className="hidden sm:inline text-ink-3">/</span>
@@ -1538,6 +1552,10 @@ const AppShell: React.FC<AppShellProps> = ({
             ) : screen === 'admin' ? (
               <span className="text-xs text-ink-2 truncate">
                 Quản trị tài khoản
+              </span>
+            ) : screen === 'lab' ? (
+              <span className="text-xs text-ink-2 truncate">
+                AI vs AI · engine thật
               </span>
             ) : (
               <>
@@ -1629,6 +1647,16 @@ const AppShell: React.FC<AppShellProps> = ({
         <Suspense fallback={<LazyFallback />}>
           <AdminScreen
             currentUser={currentUser}
+            onOpenMatch={handleOpenLiveMatch}
+            onNotify={(msg, kind) => pushToast(msg, kind)}
+          />
+        </Suspense>
+      )}
+
+      {/* Màn hình: PHÒNG LAB (tổ chức trận AI vs AI & giải round-robin) — lazy load */}
+      {screen === 'lab' && (
+        <Suspense fallback={<LazyFallback />}>
+          <LabScreen
             onOpenMatch={handleOpenLiveMatch}
             onNotify={(msg, kind) => pushToast(msg, kind)}
           />
