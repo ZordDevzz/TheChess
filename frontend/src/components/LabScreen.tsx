@@ -22,6 +22,7 @@ import {
   MatchSummaryItem,
   UserRecord,
 } from '../types';
+import { useRealtime } from '../hooks/useRealtime';
 
 interface LabScreenProps {
   onOpenMatch: (matchId: string) => Promise<void>;
@@ -87,10 +88,19 @@ export const LabScreen: React.FC<LabScreenProps> = ({ onOpenMatch, onNotify }) =
     }
   }, []);
 
+  // Realtime: topic `lobby` phủ cả dữ liệu Lab (trận mới, nước đi, kết quả giải)
+  // -> refetch ngay; poll chỉ còn fallback chậm.
+  const { subscribe: subscribeRealtime } = useRealtime();
+  useEffect(() => {
+    return subscribeRealtime('lobby', () => {
+      refresh();
+    });
+  }, [subscribeRealtime, refresh]);
+
   useEffect(() => {
     refresh();
-    // Poll 5s: trận chạy nền trên server, màn Lab cần bắt kịp từng nước.
-    const t = window.setInterval(refresh, 5000);
+    // Poll 30s: chỉ bắt lỗi bỏ lỡ event khi WS chết (hub tự reconnect).
+    const t = window.setInterval(refresh, 30_000);
     return () => window.clearInterval(t);
   }, [refresh]);
 

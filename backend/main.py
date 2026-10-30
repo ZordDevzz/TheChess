@@ -6,9 +6,11 @@ FastAPI Backend cho TheChess:
 - Game Review toàn trận (chạy nền kiểu job, có tiến độ) & Kiểm tra hợp lệ FEN cho Board Editor
 """
 import asyncio
+import json
 import os
 import socket
 import subprocess
+import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -53,8 +55,8 @@ db_manager = DatabaseManager()
 
 
 async def _match_ws_broadcast(match_id: str, event: str) -> None:
-    """Adapter: LabManager phát sự kiện qua registry WS của main."""
-    await match_ws_manager.broadcast(match_id, {"type": event, "match_id": match_id})
+    """Adapter: LabManager phát sự kiện qua hub (kèm gợn lobby cho Sảnh/Lab)."""
+    await _broadcast_match_event(match_id, event)
 
 
 lab_manager = LabManager(engine_manager, db_manager, _match_ws_broadcast)
@@ -361,6 +363,15 @@ async def _run_review_job(job_id: str, req: GameReviewRequest) -> None:
 
     def _report(done: int, total: int) -> None:
         job["progress"] = {"done": done, "total": total}
+        # Progress stream qua WS topic review:{id} — client refetch GET job khi nhận.
+        try:
+            asyncio.get_running_loop().create_task(
+                _publish_review_event(
+                    job_id, {"type": "review_progress", "done": done, "total": total}
+                )
+            )
+        except RuntimeError:
+            pass  # ngoài loop (test sync) — client vẫn còn poll fallback
 
     try:
         result = await engine_manager.review_game(
@@ -371,12 +382,15 @@ async def _run_review_job(job_id: str, req: GameReviewRequest) -> None:
         )
         job["result"] = result
         job["status"] = "done"
+        await _publish_review_event(job_id, {"type": "review_done"})
     except asyncio.CancelledError:
         job["status"] = "cancelled"
         job["error"] = job.get("error") or "Job review đã bị hủy."
+        await _publish_review_event(job_id, {"type": "review_done"})
     except Exception as e:  # noqa: BLE001 - báo lỗi nguyên văn về cho client
         job["error"] = str(e)
         job["status"] = "error"
+        await _publish_review_event(job_id, {"type": "review_done"})
 
 
 @app.get("/api/review-game/{job_id}")
@@ -455,47 +469,164 @@ async def validate_fen(req: ValidateFenRequest) -> Dict[str, Any]:
 
 
 # ------------------------------------------------------------------------------
-# P2-1: WebSocket push — nước đi/takeback/kết thúc ván được phát tức thì tới
-# đối thủ & khán giả thay vì chỉ dựa vào HTTP polling của client.
+# P2-1 → Realtime hub: server broadcast + client subscribe theo topic.
+# 1 kết nối WS duy nhất (/api/ws) cho toàn app: match:{id} | lobby | review:{id}.
+# Server push event nhẹ (notify), client refetch REST — nguồn truth vẫn HTTP.
+# Endpoint cũ /api/ws/matches/{id} giữ làm tương thích (auto-subscribe match:{id}).
 # ------------------------------------------------------------------------------
-class MatchConnectionManager:
-    """Quản lý các kết nối WebSocket đang theo dõi từng ván đấu (in-memory)."""
+class TopicHub:
+    """
+    Fan-out event theo topic (in-memory, gắn với 1 process — đủ cho 20-50 user;
+    khi cần multi-worker, thay chỗ publish bằng Redis pub/sub adapter).
+    """
 
     def __init__(self) -> None:
-        self._channels: Dict[str, Any] = {}
+        self._topics: Dict[str, Any] = {}
 
-    async def connect(self, match_id: str, websocket: WebSocket) -> None:
+    async def register(self, websocket: WebSocket) -> None:
         await websocket.accept()
-        self._channels.setdefault(match_id, set()).add(websocket)
 
-    def disconnect(self, match_id: str, websocket: WebSocket) -> None:
-        sockets = self._channels.get(match_id)
-        if sockets is None:
+    def subscribe(self, topic: str, websocket: WebSocket) -> None:
+        self._topics.setdefault(topic, set()).add(websocket)
+
+    def unsubscribe(self, topic: str, websocket: WebSocket) -> None:
+        subs = self._topics.get(topic)
+        if subs is None:
             return
-        sockets.discard(websocket)
-        if not sockets:
-            self._channels.pop(match_id, None)
+        subs.discard(websocket)
+        if not subs:
+            self._topics.pop(topic, None)
 
-    async def broadcast(self, match_id: str, payload: Dict[str, Any]) -> None:
-        sockets = list(self._channels.get(match_id, ()))
-        for websocket in sockets:
+    def disconnect(self, websocket: WebSocket) -> None:
+        for topic in list(self._topics):
+            self.unsubscribe(topic, websocket)
+
+    async def publish(self, topic: str, payload: Dict[str, Any]) -> None:
+        for websocket in list(self._topics.get(topic, ())):
             try:
                 await websocket.send_json(payload)
             except Exception:
-                self.disconnect(match_id, websocket)
+                self.unsubscribe(topic, websocket)
+
+    # --- Tương thích ngược với MatchConnectionManager cũ ---
+    async def connect(self, match_id: str, websocket: WebSocket) -> None:
+        await websocket.accept()
+        self.subscribe(f"match:{match_id}", websocket)
+
+    def disconnect_match(self, match_id: str, websocket: WebSocket) -> None:
+        self.unsubscribe(f"match:{match_id}", websocket)
+
+    async def broadcast(self, match_id: str, payload: Dict[str, Any]) -> None:
+        await self.publish(f"match:{match_id}", payload)
 
 
-match_ws_manager = MatchConnectionManager()
+#: Topic được phép subscribe — chặn topic tùy tiện làm phình bộ nhớ hub.
+_ALLOWED_TOPIC_PREFIXES = ("match:", "review:")
+_ALLOWED_TOPICS = {"lobby"}
+
+
+def _topic_allowed(topic: str) -> bool:
+    return topic in _ALLOWED_TOPICS or any(
+        topic.startswith(p) and len(topic) > len(p) for p in _ALLOWED_TOPIC_PREFIXES
+    )
+
+
+topic_hub = TopicHub()
 
 
 async def _broadcast_match_event(match_id: str, event: str) -> None:
-    """Phát sự kiện nhẹ; client nhận được sẽ tự refetch trạng thái ván đấu."""
+    """Phát sự kiện nhẹ cho topic trận + gợn sóng sang topic lobby (Sảnh refetch)."""
     try:
-        await match_ws_manager.broadcast(
-            match_id, {"type": event, "match_id": match_id}
+        await topic_hub.publish(
+            f"match:{match_id}",
+            {"topic": f"match:{match_id}", "type": event, "match_id": match_id},
         )
     except Exception:  # noqa: BLE001 - broadcast không được làm hỏng request chính
         pass
+    await _publish_lobby_event(reason="move" if event == "match_updated" else event)
+
+
+_lobby_last_publish = 0.0
+
+
+async def _publish_lobby_event(reason: str) -> None:
+    """
+    Báo topic `lobby` có thay đổi (Sảnh/Phòng Lab refetch danh sách).
+    Event nước đi bị throttle 1s (Lab chạy nền đi nước liên tục); event quan trọng
+    (tạo/kết thúc/abort trận) luôn phát để không bao giờ bị bỏ lỡ.
+    """
+    global _lobby_last_publish
+    now = time.monotonic()
+    if reason == "move" and now - _lobby_last_publish < 1.0:
+        return
+    _lobby_last_publish = now
+    try:
+        await topic_hub.publish(
+            "lobby", {"topic": "lobby", "type": "lobby_updated", "reason": reason}
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
+async def _publish_review_event(job_id: str, payload: Dict[str, Any]) -> None:
+    try:
+        await topic_hub.publish(
+            f"review:{job_id}", {"topic": f"review:{job_id}", **payload}
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
+@app.websocket("/api/ws")
+async def ws_app_channel(
+    websocket: WebSocket,
+    token: Optional[str] = None,
+) -> None:
+    """
+    Kênh realtime duy nhất của app (server broadcast + client subscribe).
+    Client gửi `?token=<session token>` để xác thực, sau đó giao tiếp:
+      - "ping"                                    → {"type":"pong"} (heartbeat)
+      - {"action":"subscribe","topic":"match:x"}  → topic hợp lệ: match:<id> | lobby | review:<id>
+      - {"action":"unsubscribe","topic":"..."}
+    Server push {"topic":..., "type":"lobby_updated" | "match_updated" | ..., ...};
+    client nhận event thì refetch REST tương ứng (notify + refetch).
+    """
+    if not token:
+        await websocket.close(code=4401)
+        return
+    user = db_manager.verify_token_and_get_user(token, expected_purpose="session")
+    if not user:
+        await websocket.close(code=4401)
+        return
+
+    await topic_hub.register(websocket)
+    try:
+        while True:
+            message = await websocket.receive_text()
+            if message == "ping":
+                await websocket.send_json({"type": "pong"})
+                continue
+            try:
+                data = json.loads(message)
+                action = data.get("action")
+                topic = data.get("topic", "")
+                if not isinstance(topic, str) or not _topic_allowed(topic):
+                    await websocket.send_json(
+                        {"type": "error", "detail": f"Topic không hợp lệ: {topic}"}
+                    )
+                    continue
+                if action == "subscribe":
+                    topic_hub.subscribe(topic, websocket)
+                    await websocket.send_json({"type": "subscribed", "topic": topic})
+                elif action == "unsubscribe":
+                    topic_hub.unsubscribe(topic, websocket)
+            except (ValueError, TypeError):
+                # Frame không phải JSON hợp lệ — bỏ qua, giữ kết nối sống
+                continue
+    except WebSocketDisconnect:
+        pass
+    finally:
+        topic_hub.disconnect(websocket)
 
 
 @app.websocket("/api/ws/matches/{match_id}")
@@ -505,10 +636,8 @@ async def ws_match_channel(
     token: Optional[str] = None,
 ) -> None:
     """
-    Kênh realtime của 1 ván đấu. Client gửi `?token=<session token>` để xác thực
-    (WebSocket của trình duyệt không đặt được header Authorization).
-    Server push `{"type": "match_updated" | "match_finished", ...}`;
-    client nhận sự kiện thì refetch `GET /api/matches/{match_id}`.
+    [Tương thích ngược] Kênh realtime của 1 ván đấu — tự subscribe topic
+    `match:{match_id}` trên hub chung. Client mới dùng /api/ws + subscribe.
     """
     if not token:
         await websocket.close(code=4401)
@@ -521,7 +650,7 @@ async def ws_match_channel(
         await websocket.close(code=4404)
         return
 
-    await match_ws_manager.connect(match_id, websocket)
+    await topic_hub.connect(match_id, websocket)
     try:
         while True:
             # Chỉ nhận heartbeat từ client; mọi dữ liệu authority đều đi qua REST API.
@@ -531,7 +660,7 @@ async def ws_match_channel(
     except WebSocketDisconnect:
         pass
     finally:
-        match_ws_manager.disconnect(match_id, websocket)
+        topic_hub.disconnect_match(match_id, websocket)
 
 
 def _extract_bearer_token(authorization: Optional[str]) -> Optional[str]:
@@ -725,6 +854,7 @@ async def create_match_endpoint(
         created = db_manager.create_match(req)
         details = db_manager.get_match_with_details(created.id)
         assert details is not None
+        await _publish_lobby_event(reason="match_created")
         return details
     except (KeyError, ValueError, PermissionError) as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -778,7 +908,9 @@ async def create_lab_tournament_endpoint(
     user: UserRecord = Depends(get_current_user),
 ) -> Dict[str, Any]:
     try:
-        return await lab_manager.create_tournament(req, creator_user_id=user.id)
+        created = await lab_manager.create_tournament(req, creator_user_id=user.id)
+        await _publish_lobby_event(reason="lab_tournament_created")
+        return created
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except ValueError as e:
@@ -1057,7 +1189,10 @@ async def admin_abort_match(
     admin: UserRecord = Depends(get_current_admin),
 ) -> MatchRecord:
     try:
-        return db_manager.abort_match_by_admin(admin.id, match_id)
+        aborted = db_manager.abort_match_by_admin(admin.id, match_id)
+        await _broadcast_match_event(match_id, "match_finished")
+        await _publish_lobby_event(reason="match_aborted")
+        return aborted
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
 

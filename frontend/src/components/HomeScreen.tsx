@@ -22,6 +22,7 @@ import {
   X,
 } from 'lucide-react';
 import { fetchLobbyApi } from '../api';
+import { useRealtime } from '../hooks/useRealtime';
 import {
   AnalysisLevel,
   GameModeId,
@@ -227,11 +228,20 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
     }
   };
 
+  // Realtime: topic `lobby` server báo có thay đổi (trận mới/kết thúc/nước đi)
+  // -> refetch ngay. Poll chỉ còn fallback chậm cho khi WS rớt.
+  const { subscribe: subscribeRealtime } = useRealtime();
+  useEffect(() => {
+    return subscribeRealtime('lobby', () => {
+      loadLobby(true);
+    });
+  }, [subscribeRealtime]);
+
   useEffect(() => {
     loadLobby(true);
     const timer = window.setInterval(() => {
       loadLobby(true);
-    }, 3200);
+    }, 30_000);
     return () => window.clearInterval(timer);
   }, []);
 

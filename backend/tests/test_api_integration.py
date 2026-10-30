@@ -568,15 +568,27 @@ def test_quick_link_survives_own_password_change(client, admin):
     assert r3.status_code == 200, r3.text
 
 
-def test_quick_link_revoked_by_admin_revoke(client, admin, players):
-    alice = players["alice"]
-    ql = _make_quick_link(client, admin, alice["id"])
+def test_quick_link_revoked_by_admin_revoke(client, admin):
+    """Dùng user riêng: revoke bump token_version — không giết token alice
+    của fixture `players` (session-scoped, dùng chung cho các test sau)."""
+    resp = client.post(
+        "/api/admin/users",
+        json={
+            "username": "sam",
+            "password": "sam-pass-123",
+            "display_name": "Sam",
+        },
+        headers=admin["headers"],
+    )
+    assert resp.status_code == 200, resp.text
+    uid = resp.json()["user"]["id"]
+    ql = _make_quick_link(client, admin, uid)
     assert (
         client.post("/api/auth/quick-login", json={"login_token": ql}).status_code
         == 200
     )
     resp = client.post(
-        f"/api/admin/users/{alice['id']}/revoke", headers=admin["headers"]
+        f"/api/admin/users/{uid}/revoke", headers=admin["headers"]
     )
     assert resp.status_code == 200, resp.text
     again = client.post("/api/auth/quick-login", json={"login_token": ql})
@@ -607,3 +619,72 @@ def test_quick_link_revoked_by_admin_password_reset(client, admin):
     assert reset.status_code == 200, reset.text
     again = client.post("/api/auth/quick-login", json={"login_token": ql})
     assert again.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# Realtime hub /api/ws: subscribe theo topic + nhận event từ mutation REST
+# ---------------------------------------------------------------------------
+def _ws_recv_until(ws, predicate, limit: int = 50) -> dict:
+    """Đọc frame tới khi khớp predicate — bỏ qua frame nền (lobby_updated...)
+    từ trận exhibition Lab chạy nền trong suite."""
+    for _ in range(limit):
+        frame = ws.receive_json()
+        if predicate(frame):
+            return frame
+    raise AssertionError("Không nhận được frame mong đợi trong budget")
+
+
+def test_ws_hub_subscribe_and_receive_events(client, players):
+    alice = players["alice"]
+    created = make_playing_match(client, players)
+    match_id = created["match"]["id"]
+
+    with client.websocket_connect(f"/api/ws?token={alice['token']}") as ws:
+        # Subscribe hợp lệ -> ack
+        ws.send_json({"action": "subscribe", "topic": "lobby"})
+        ack = _ws_recv_until(
+            ws, lambda f: f.get("type") == "subscribed" and f.get("topic") == "lobby"
+        )
+        assert ack == {"type": "subscribed", "topic": "lobby"}
+
+        # Topic tùy ý bị chặn
+        ws.send_json({"action": "subscribe", "topic": "hack:whatever"})
+        resp = _ws_recv_until(ws, lambda f: f.get("type") == "error")
+        assert resp["type"] == "error"
+
+        # Heartbeat qua chính WS (không cần HTTP health check)
+        ws.send_text("ping")
+        assert _ws_recv_until(ws, lambda f: f.get("type") == "pong")["type"] == "pong"
+
+        # Rời topic lobby để không nhận event nền từ trận exhibition khác.
+        # (Server không ack unsubscribe — không đợi frame trả lời.)
+        ws.send_json({"action": "unsubscribe", "topic": "lobby"})
+
+        # Subscribe topic trận -> nhận match_updated khi có nước đi qua REST
+        ws.send_json({"action": "subscribe", "topic": f"match:{match_id}"})
+        assert (
+            _ws_recv_until(
+                ws,
+                lambda f: f.get("type") == "subscribed"
+                and f.get("topic") == f"match:{match_id}",
+            )["type"]
+            == "subscribed"
+        )
+
+        r = client.post(
+            f"/api/matches/{match_id}/move",
+            json={"player_user_id": alice["id"], "uci": "e2e4"},
+            headers=alice["headers"],
+        )
+        assert r.status_code == 200, r.text
+
+        evt = _ws_recv_until(ws, lambda f: f.get("topic") == f"match:{match_id}")
+        assert evt["type"] == "match_updated"
+
+
+def test_ws_hub_rejects_bad_token(client):
+    import pytest as _pytest
+
+    with _pytest.raises(Exception):
+        with client.websocket_connect("/api/ws?token=khong-hop-le"):
+            pass

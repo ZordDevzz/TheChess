@@ -3,6 +3,7 @@ import { cancelReviewJob, getReviewJob, startGameReview } from '../api';
 import { GameReviewResult, MoveRecord } from '../types';
 import { ToastKind } from '../components/Toasts';
 import { CLASSIFICATION_META } from '../theme/semantic';
+import { useRealtime } from './useRealtime';
 
 interface UseGameReviewParams {
   initialFen: string;
@@ -27,6 +28,7 @@ export function useGameReview({
     done: number;
     total: number;
   } | null>(null);
+  const { subscribe: subscribeRealtime } = useRealtime();
 
   const activeJobIdRef = useRef<string | null>(null);
 
@@ -67,23 +69,47 @@ export function useGameReview({
       });
       activeJobIdRef.current = start.job_id;
 
-      let result: GameReviewResult | null = null;
-      while (activeJobIdRef.current === start.job_id) {
-        await new Promise((r) => setTimeout(r, 450));
-        if (activeJobIdRef.current !== start.job_id) return;
+      // Realtime: server push tiến độ qua topic review:{id} -> fetch ngay;
+      // poll 3s chỉ là fallback khi WS rớt (trước đây poll dồn 450ms).
+      const wakeRef: { current: (() => void) | null } = { current: null };
+      const unsubscribe = subscribeRealtime(
+        `review:${start.job_id}`,
+        () => wakeRef.current?.()
+      );
+      const waitEvent = (ms: number) =>
+        new Promise<void>((resolve) => {
+          let done = false;
+          const finish = () => {
+            if (done) return;
+            done = true;
+            window.clearTimeout(timer);
+            resolve();
+          };
+          const timer = window.setTimeout(finish, ms);
+          wakeRef.current = finish;
+        });
 
-        const job = await getReviewJob(start.job_id);
-        setReviewProgress(job.progress);
-        if (job.status === 'done' && job.result) {
-          result = job.result;
-          break;
+      let result: GameReviewResult | null = null;
+      try {
+        while (activeJobIdRef.current === start.job_id) {
+          await waitEvent(3_000);
+          if (activeJobIdRef.current !== start.job_id) return;
+
+          const job = await getReviewJob(start.job_id);
+          setReviewProgress(job.progress);
+          if (job.status === 'done' && job.result) {
+            result = job.result;
+            break;
+          }
+          if (job.status === 'cancelled') {
+            return;
+          }
+          if (job.status === 'error') {
+            throw new Error(job.error || 'Lỗi không xác định khi review');
+          }
         }
-        if (job.status === 'cancelled') {
-          return;
-        }
-        if (job.status === 'error') {
-          throw new Error(job.error || 'Lỗi không xác định khi review');
-        }
+      } finally {
+        unsubscribe();
       }
 
       if (!result || activeJobIdRef.current !== start.job_id) return;

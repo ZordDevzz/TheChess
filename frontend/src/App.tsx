@@ -71,6 +71,7 @@ import { useTheme } from './theme/ThemeProvider';
 import { useBoardSize } from './hooks/useBoardSize';
 import { useGameReview } from './hooks/useGameReview';
 import { useChessClock } from './hooks/useChessClock';
+import { resetRealtime } from './hooks/useRealtime';
 import { useMatchSync } from './hooks/useMatchSync';
 import { useAnalysisController } from './hooks/useAnalysisController';
 import { useLiveClassification } from './hooks/useLiveClassification';
@@ -250,6 +251,7 @@ const AppShell: React.FC<AppShellProps> = ({
 
   const handleLogout = () => {
     logout();
+    resetRealtime(); // đóng WS realtime — đăng nhập mới sẽ mở lại token mới
     setActiveMatch(null);
     setScreen('home');
   };
