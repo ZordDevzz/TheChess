@@ -1,5 +1,5 @@
 import React from 'react';
-import { GamePhase, MoveRecord } from '../types';
+import { FeatureVisibility, GamePhase, MoveRecord } from '../types';
 import { CLASSIFICATION_META } from '../theme/semantic';
 import {
   ChevronFirst,
@@ -21,6 +21,7 @@ interface MoveHistoryProps {
   currentPly: number;
   phase: GamePhase;
   canTakeback: boolean;
+  visibility: FeatureVisibility;
   onSelectPly: (ply: number) => void;
   onTakeback: () => void;
   onExportPgn: () => void;
@@ -35,6 +36,7 @@ export const MoveHistory: React.FC<MoveHistoryProps> = ({
   currentPly,
   phase,
   canTakeback,
+  visibility,
   onSelectPly,
   onTakeback,
   onExportPgn,
@@ -111,22 +113,26 @@ export const MoveHistory: React.FC<MoveHistoryProps> = ({
             <FlipHorizontal className="w-3 h-3 text-ink-2" />
             Xoay
           </button>
-          <button
-            onClick={onSwitchSides}
-            className="px-2 py-0.5 rounded bg-inset hover:bg-card border border-line text-xs text-ink-2 flex items-center gap-1 transition cursor-pointer"
-            title="Đổi bên với AI"
-          >
-            <RefreshCw className="w-3 h-3 text-ink-2" />
-            Đổi bên
-          </button>
-          <button
-            onClick={onNewGame}
-            className="px-2 py-0.5 rounded bg-inset hover:bg-card border border-line text-xs text-ink-2 flex items-center gap-1 transition cursor-pointer"
-            title="Về màn chuẩn bị & bắt đầu ván mới"
-          >
-            <RotateCcw className="w-3 h-3 text-ink-2" />
-            Ván mới
-          </button>
+          {visibility.switchSides && (
+            <button
+              onClick={onSwitchSides}
+              className="px-2 py-0.5 rounded bg-inset hover:bg-card border border-line text-xs text-ink-2 flex items-center gap-1 transition cursor-pointer"
+              title="Đổi bên với AI"
+            >
+              <RefreshCw className="w-3 h-3 text-ink-2" />
+              Đổi bên
+            </button>
+          )}
+          {visibility.newGame && (
+            <button
+              onClick={onNewGame}
+              className="px-2 py-0.5 rounded bg-inset hover:bg-card border border-line text-xs text-ink-2 flex items-center gap-1 transition cursor-pointer"
+              title="Ván mới (ván online: về Sảnh)"
+            >
+              <RotateCcw className="w-3 h-3 text-ink-2" />
+              Ván mới
+            </button>
+          )}
         </div>
       </div>
 
@@ -278,7 +284,7 @@ export const MoveHistory: React.FC<MoveHistoryProps> = ({
         </div>
 
         <div className="flex items-center gap-1">
-          {phase === 'playing' && currentPly < moves.length && (
+          {visibility.branchFromHere && phase === 'playing' && currentPly < moves.length && (
             <button
               onClick={onBranchFromHere}
               className="px-2.5 py-1 rounded bg-accent hover:opacity-90 text-accent-ink text-xs font-medium flex items-center gap-1 transition cursor-pointer"

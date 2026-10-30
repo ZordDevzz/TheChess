@@ -130,7 +130,7 @@ export const EnginePanel: React.FC<EnginePanelProps> = ({
               Gợi ý
             </button>
           )}
-          {config.opponent === 'ai' && phase === 'playing' && (
+          {visibility.triggerAiMove && (
             <button
               onClick={onTriggerAiMoveNow}
               disabled={isAiThinking}
@@ -140,7 +140,7 @@ export const EnginePanel: React.FC<EnginePanelProps> = ({
               {isAiThinking ? '...' : 'AI đi'}
             </button>
           )}
-          {phase === 'playing' && (
+          {visibility.resign && (
             <button
               onClick={onResign}
               className="p-1.5 rounded-md bg-inset hover:bg-card border border-line text-rose-400 transition cursor-pointer"
@@ -149,13 +149,15 @@ export const EnginePanel: React.FC<EnginePanelProps> = ({
               <Flag className="w-3 h-3" />
             </button>
           )}
-          <button
-            onClick={onOpenConfig}
-            className="p-1.5 rounded-md bg-inset hover:bg-card border border-line text-ink-2 transition cursor-pointer"
-            title="Cấu hình ván đấu / ván mới"
-          >
-            <Settings className="w-3 h-3" />
-          </button>
+          {visibility.openConfig && (
+            <button
+              onClick={onOpenConfig}
+              className="p-1.5 rounded-md bg-inset hover:bg-card border border-line text-ink-2 transition cursor-pointer"
+              title="Cấu hình ván đấu / ván mới"
+            >
+              <Settings className="w-3 h-3" />
+            </button>
+          )}
         </div>
       </div>
 
@@ -335,7 +337,7 @@ export const EnginePanel: React.FC<EnginePanelProps> = ({
                           <span>{line.pv_san.slice(1).join(' ')}</span>
                         </div>
                       </div>
-                      {phase === 'playing' && (
+                      {visibility.playSuggestedMove && (
                         <button
                           onClick={() => onPlaySuggestedMove(line.move_uci)}
                           className="opacity-0 group-hover:opacity-100 px-1.5 py-0.5 rounded bg-card hover:bg-overlay text-ink text-[11px] flex items-center gap-0.5 shrink-0 transition cursor-pointer"

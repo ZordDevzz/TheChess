@@ -6,6 +6,7 @@ import { Chess } from 'chess.js';
 import {
   AnalysisLevel,
   FeatureVisibility,
+  FeatureVisibilityContext,
   GameConfig,
   GameOverInfo,
   GameModeId,
@@ -146,22 +147,63 @@ export function alignPlayersWithColor(
 }
 
 /**
- * Bảng gating: tính năng nào được phép theo config + phase.
- * Khi ván kết thúc mọi phân tích mở lại full (hết tính chất thi đấu).
+ * Bảng gating: tính năng nào được phép theo config + phase + bối cảnh ván đấu.
+ * NGUỒN CHÂN LÝ DUY NHẤT cho sidebar MatchScreen — EnginePanel/MoveHistory/
+ * EvalGraph chỉ đọc cờ, tuyệt đối không tự thêm điều kiện theo chế độ.
+ *
+ * Nguyên tắc:
+ * - Khi ván kết thúc mọi phân tích mở lại full (hết tính chất thi đấu).
+ * - Khán giả: khóa mọi thao tác can thiệp, mở full phân tích.
+ * - Ván server (online / tạo từ Sảnh): cấu hìnhowned bởi server — không cho
+ *   đổi bên/nhánh/cấu hình giữa chừng; "Ván mới" mang nghĩa rời về Sảnh.
  */
 export function resolveFeatureVisibility(
   config: GameConfig,
-  phase: GamePhase
+  phase: GamePhase,
+  ctx: FeatureVisibilityContext = {}
 ): FeatureVisibility {
+  const { isSpectator = false, isServerMatch = false } = ctx;
   const playing = phase === 'playing';
+  const finished = phase === 'finished';
+
+  if (isSpectator) {
+    return {
+      canMove: false,
+      evalBar: true,
+      arrows: true,
+      classifyLive: false,
+      hints: false,
+      takeback: false,
+      reviewButton: true,
+      resign: false,
+      playSuggestedMove: false,
+      triggerAiMove: false,
+      openConfig: false,
+      switchSides: false,
+      branchFromHere: false,
+      newGame: false,
+      evalGraph: true,
+    };
+  }
+
+  const arrows = finished || (playing && config.analysis === 'full');
   return {
     canMove: playing,
-    evalBar: phase === 'finished' || (playing && config.analysis !== 'off'),
-    arrows: phase === 'finished' || (playing && config.analysis === 'full'),
+    evalBar: finished || (playing && config.analysis !== 'off'),
+    arrows,
     classifyLive: playing && config.analysis === 'full',
     hints: playing && config.allowHints,
     takeback: playing && config.allowTakeback,
-    reviewButton: phase === 'finished' || config.mode === 'training',
+    reviewButton: finished || config.mode === 'training',
+    // Người chơi (kể cả training — dùng như cách nhanh kết thúc ván)
+    resign: playing,
+    playSuggestedMove: playing && arrows,
+    triggerAiMove: playing && config.opponent === 'ai',
+    openConfig: !isServerMatch,
+    switchSides: !isServerMatch,
+    branchFromHere: !isServerMatch,
+    newGame: true,
+    evalGraph: finished || (playing && config.analysis === 'full'),
   };
 }
 

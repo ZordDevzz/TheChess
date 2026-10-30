@@ -141,6 +141,34 @@ export interface FeatureVisibility {
   hints: boolean;
   takeback: boolean;
   reviewButton: boolean;
+  /**
+   * Bảng năng lực sidebar MatchScreen (nguồn chân lý duy nhất — mọi component
+   * chỉ đọc cờ, không tự quyết chính sách theo chế độ):
+   */
+  /** Nút Đầu hàng (đang chơi, không phải khán giả) */
+  resign: boolean;
+  /** Nút "Đi" trên nhánh PV engine gợi ý */
+  playSuggestedMove: boolean;
+  /** Nút yêu cầu AI đi nước tiếp theo (chỉ vs_AI) */
+  triggerAiMove: boolean;
+  /** Nút ⚙ mở cấu hình ván đấu (chỉ ván local — ván server do lobby sở hữu) */
+  openConfig: boolean;
+  /** Nút Đổi bên (chỉ ván local với AI) */
+  switchSides: boolean;
+  /** Nút Nhánh từ đây (chỉ ván local) */
+  branchFromHere: boolean;
+  /** Nút Ván mới (online = về Sảnh; khán giả không có) */
+  newGame: boolean;
+  /** Hiển thị đồ thị EvalGraph */
+  evalGraph: boolean;
+}
+
+/** Bối cảnh gating: mọi thứ resolveFeatureVisibility cần biết ngoài config + phase. */
+export interface FeatureVisibilityContext {
+  /** Đang xem trực tiếp ván của người khác */
+  isSpectator?: boolean;
+  /** Ván đấu thuộc DB server (online / vs_ai tạo từ Sảnh) — cấu hình do server sở hữu */
+  isServerMatch?: boolean;
 }
 
 export interface GameReviewResult {

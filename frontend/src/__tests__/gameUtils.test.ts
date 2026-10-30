@@ -105,6 +105,88 @@ test('resolveFeatureVisibility: khóa thông tin engine khi đang thi đấu ở
   assert.equal(finishedVis.reviewButton, true);
 });
 
+test('resolveFeatureVisibility: ván local vs_ai mở đủ công cụ thao tác', () => {
+  const localVsAi: GameConfig = {
+    mode: 'vs_ai',
+    analysis: 'full',
+    allowTakeback: true,
+    allowHints: true,
+    opponent: 'ai',
+  };
+  const vis = resolveFeatureVisibility(localVsAi, 'playing');
+  assert.equal(vis.openConfig, true);
+  assert.equal(vis.switchSides, true);
+  assert.equal(vis.branchFromHere, true);
+  assert.equal(vis.newGame, true);
+  assert.equal(vis.triggerAiMove, true);
+  assert.equal(vis.resign, true);
+  assert.equal(vis.playSuggestedMove, true);
+  assert.equal(vis.evalGraph, true);
+});
+
+test('resolveFeatureVisibility: ván server (online) khóa công cụ can thiệp cấu trúc ván', () => {
+  const online: GameConfig = {
+    mode: 'online',
+    analysis: 'off',
+    allowTakeback: false,
+    allowHints: false,
+    opponent: 'human',
+  };
+  const vis = resolveFeatureVisibility(online, 'playing', { isServerMatch: true });
+  assert.equal(vis.openConfig, false); // cấu hình do server sở hữu
+  assert.equal(vis.switchSides, false);
+  assert.equal(vis.branchFromHere, false);
+  assert.equal(vis.newGame, true); // online: nút Ván mới = về Sảnh
+  assert.equal(vis.evalBar, false); // analysis off khi đang thi đấu
+  assert.equal(vis.evalGraph, false);
+  assert.equal(vis.resign, true); // người chơi được đầu hàng
+  assert.equal(vis.triggerAiMove, false);
+});
+
+test('resolveFeatureVisibility: khán giả chỉ được xem & phân tích, không thao tác', () => {
+  const online: GameConfig = {
+    mode: 'online',
+    analysis: 'off',
+    allowTakeback: true,
+    allowHints: true,
+    opponent: 'human',
+  };
+  const vis = resolveFeatureVisibility(online, 'playing', {
+    isSpectator: true,
+    isServerMatch: true,
+  });
+  assert.equal(vis.canMove, false);
+  assert.equal(vis.evalBar, true);
+  assert.equal(vis.arrows, true);
+  assert.equal(vis.evalGraph, true);
+  assert.equal(vis.hints, false); // allowHints của ván không áp dụng cho khán giả
+  assert.equal(vis.takeback, false);
+  assert.equal(vis.resign, false);
+  assert.equal(vis.playSuggestedMove, false);
+  assert.equal(vis.triggerAiMove, false);
+  assert.equal(vis.openConfig, false);
+  assert.equal(vis.switchSides, false);
+  assert.equal(vis.branchFromHere, false);
+  assert.equal(vis.newGame, false);
+  assert.equal(vis.reviewButton, true);
+});
+
+test('resolveFeatureVisibility: training được đầu hàng, reviewButton luôn mở', () => {
+  const training: GameConfig = {
+    mode: 'training',
+    analysis: 'eval_only',
+    allowTakeback: true,
+    allowHints: true,
+    opponent: 'human',
+  };
+  const vis = resolveFeatureVisibility(training, 'playing');
+  assert.equal(vis.resign, true);
+  assert.equal(vis.reviewButton, true);
+  assert.equal(vis.evalBar, true);
+  assert.equal(vis.arrows, false); // eval_only: không mũi tên
+  assert.equal(vis.playSuggestedMove, false);
+});
+
 test('recordsFromUciList & buildPgn: dựng biên bản chính xác và xuất PGN hợp lệ', () => {
   const records = recordsFromUciList(STARTING_FEN, ['e2e4', 'e7e5', 'g1f3']);
   assert.equal(records.length, 3);

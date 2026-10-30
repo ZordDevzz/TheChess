@@ -268,26 +268,16 @@ const AppShell: React.FC<AppShellProps> = ({
     }
   }, [currentFen]);
 
-  const baseVisibility = useMemo(
-    () => resolveFeatureVisibility(config, phase),
-    [config, phase]
+  // Bảng năng lực duy nhất cho toàn bộ sidebar MatchScreen (P-gating):
+  // khán giả & ván server được xử lý ngay trong resolveFeatureVisibility.
+  const visibility = useMemo(
+    () =>
+      resolveFeatureVisibility(config, phase, {
+        isSpectator,
+        isServerMatch: activeMatch != null,
+      }),
+    [config, phase, isSpectator, activeMatch]
   );
-
-  // Nếu là khán giả (Spectator), khóa đi quân nhưng mở khóa thanh đánh giá & mũi tên engine
-  const visibility = useMemo(() => {
-    if (isSpectator) {
-      return {
-        ...baseVisibility,
-        canMove: false,
-        evalBar: true,
-        arrows: true,
-        hints: false,
-        takeback: false,
-        reviewButton: true,
-      };
-    }
-    return baseVisibility;
-  }, [baseVisibility, isSpectator]);
 
   const modeLabel =
     MODE_PRESETS.find((m) => m.id === config.mode)?.label ?? config.mode;
@@ -1894,6 +1884,7 @@ const AppShell: React.FC<AppShellProps> = ({
                   currentPly={currentPly}
                   phase={phase}
                   canTakeback={visibility.takeback}
+                  visibility={visibility}
                   onSelectPly={(ply) => setCurrentPly(ply)}
                   onTakeback={handleTakeback}
                   onExportPgn={handleExportPgn}
@@ -1909,12 +1900,14 @@ const AppShell: React.FC<AppShellProps> = ({
                     const nextColor = playerColor === 'w' ? 'b' : 'w';
                     handleChangePlayerColor(nextColor);
                   }}
-                  onNewGame={handleNewGame}
+                  onNewGame={
+                    activeMatch
+                      ? () => setScreen('home')
+                      : handleNewGame
+                  }
                 />
 
-                {(isSpectator ||
-                  phase !== 'playing' ||
-                  config.analysis === 'full') && (
+                {visibility.evalGraph && (
                   <EvalGraph
                     moves={moves}
                     currentPly={currentPly}
