@@ -737,10 +737,14 @@ async def get_match_endpoint(
     match_id: str,
     user: UserRecord = Depends(get_current_user),
 ) -> MatchWithDetailsResponse:
-    db_manager.step_exhibition_match_if_needed(match_id, min_interval_sec=1.4)
+    stepped = db_manager.step_exhibition_match_if_needed(match_id, min_interval_sec=1.4)
     details = db_manager.get_match_with_details(match_id)
     if not details:
         raise HTTPException(status_code=404, detail="Không tìm thấy trận đấu.")
+    # Trận biểu diễn vừa tiến thêm nước -> phát event để khán giả refetch từng nước
+    # ngay (nước của người chơi qua /move đã được broadcast sẵn).
+    if stepped:
+        await _broadcast_match_event(match_id, "match_updated")
     return details
 
 

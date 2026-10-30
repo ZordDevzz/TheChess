@@ -19,6 +19,7 @@ interface UseMatchSyncParams {
   currentUser: UserRecord | null;
   isSpectator: boolean;
   moves: MoveRecord[];
+  currentPly: number;
   /** Hydrate toàn bộ ván đấu từ response server (do App sở hữu trạng thái ván) */
   hydrateMatchFromServer: (
     res: MatchWithDetailsResponse,
@@ -51,6 +52,7 @@ export function useMatchSync({
   currentUser,
   isSpectator,
   moves,
+  currentPly,
   hydrateMatchFromServer,
   pushToast,
   setActiveMatch,
@@ -65,6 +67,14 @@ export function useMatchSync({
   useEffect(() => {
     movesLenRef.current = moves.length;
   }, [moves.length]);
+
+  const currentPlyRef = useRef<number>(currentPly);
+  useEffect(() => {
+    currentPlyRef.current = currentPly;
+  }, [currentPly]);
+
+  /** Ply đích của animation "đi tuần tự từng nước" cho khán giả đang theo dõi ván */
+  const followTargetRef = useRef<number>(0);
 
   // ------------------ Kênh WebSocket push (P2-1) ------------------
   // Khi có activeMatch cần đồng bộ (online / spectator / phòng chờ), mở WS để
@@ -98,8 +108,33 @@ export function useMatchSync({
 
     let cancelled = false;
     let inFlight = false;
+    let animTimer: number | null = null;
     const matchId = activeMatch.id;
     const prevStatus = activeMatch.status;
+
+    /**
+     * Khán giả đang ở nước cuối mới nhất -> nếu sync về 2+ nước dồn dập
+     * (polling giãn nhịp, mất WS, đối thủ đi nhanh), cho currentPly đi
+     * TUẦN TỪ từng nước thay vì nhảy cóc — mỗi nước cách nhau 350ms.
+     */
+    const advanceFollow = (fromPly: number) => {
+      if (cancelled || animTimer !== null) {
+        // animation đang chạy: chỉ cần cập nhật target ở nơi gọi
+        return;
+      }
+      let ply = fromPly;
+      const runner = () => {
+        const target = followTargetRef.current;
+        if (cancelled || ply >= target) {
+          animTimer = null;
+          return;
+        }
+        ply += 1;
+        setCurrentPly(ply);
+        animTimer = ply < target ? window.setTimeout(runner, 350) : null;
+      };
+      animTimer = window.setTimeout(runner, 0);
+    };
 
     const runSync = async () => {
       if (cancelled || inFlight) return;
@@ -121,7 +156,6 @@ export function useMatchSync({
           res.moves.length !== movesLenRef.current ||
           m.status !== prevStatus
         ) {
-          const prevLen = movesLenRef.current;
           setActiveMatch(m);
           const built = detailRecordsToMoveRecords(res.moves);
           setMoves((prevMoves) =>
@@ -142,9 +176,18 @@ export function useMatchSync({
               };
             })
           );
-          setCurrentPly((prevPly) =>
-            prevPly >= Math.max(0, prevLen - 1) ? built.length : prevPly
-          );
+          // Theo dõi nước mới nhất: nếu đang ở (gần) nước cuối thì auto-follow.
+          // Gap >1 nước -> đi tuần tự để khán giả thấy từng nước một.
+          const autoFollow =
+            currentPlyRef.current >= Math.max(0, movesLenRef.current - 1);
+          if (autoFollow) {
+            followTargetRef.current = built.length;
+            if (built.length - movesLenRef.current <= 1) {
+              setCurrentPly(built.length);
+            } else {
+              advanceFollow(movesLenRef.current);
+            }
+          }
           syncClockFromServer(
             m.white_clock_ms ?? m.initial_time_ms ?? null,
             m.black_clock_ms ?? m.initial_time_ms ?? null,
@@ -206,6 +249,10 @@ export function useMatchSync({
         syncNowRef.current = null;
       }
       window.clearInterval(timer);
+      if (animTimer !== null) {
+        window.clearTimeout(animTimer);
+        animTimer = null;
+      }
     };
   }, [
     screen,

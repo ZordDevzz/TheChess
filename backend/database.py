@@ -2068,18 +2068,20 @@ class DatabaseManager:
 
     def step_exhibition_match_if_needed(
         self, match_id: str, min_interval_sec: float = 1.4
-    ) -> None:
+    ) -> bool:
         """
         Khi người dùng đang ở trong MatchScreen xem trực tiếp (`GET /api/matches/{match_id}`),
         nếu bàn đang xem là trận biểu diễn AI vs AI đang `playing`, tự động đi tiếp nước cờ
         để bàn cờ luôn sống động mà không phụ thuộc vào việc có ai đang mở màn hình Sảnh hay không.
+
+        Trả về True nếu ván đã tiến thêm nước (để endpoint broadcast WS cho khán giả).
         """
         with self.read_connection() as conn:
             m_row = conn.execute(
                 'SELECT * FROM "match" WHERE id = ?', (match_id,)
             ).fetchone()
             if not m_row or m_row["status"] != "playing":
-                return
+                return False
             w_row = conn.execute(
                 'SELECT is_bot FROM "user" WHERE id = ?', (m_row["white_user_id"],)
             ).fetchone()
@@ -2087,10 +2089,14 @@ class DatabaseManager:
                 'SELECT is_bot FROM "user" WHERE id = ?', (m_row["black_user_id"],)
             ).fetchone()
             if not w_row or not b_row or not (w_row["is_bot"] and b_row["is_bot"]):
-                return
+                return False
             match_obj = self._row_to_match(m_row)
+            plies_before = m_row["total_plies"]
 
         self._step_single_exhibition_match(match_obj, min_interval_sec=min_interval_sec)
+
+        after = self.get_match_record(match_id)
+        return after is not None and after.total_plies != plies_before
 
     def ensure_or_step_exhibition_match(
         self, viewer_elo: int = 1500

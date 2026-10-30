@@ -592,6 +592,7 @@ const AppShell: React.FC<AppShellProps> = ({
     currentUser,
     isSpectator,
     moves,
+    currentPly,
     hydrateMatchFromServer,
     pushToast,
     setActiveMatch,
