@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import chess
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -435,6 +435,86 @@ async def validate_fen(req: ValidateFenRequest) -> Dict[str, Any]:
 # ==============================================================================
 
 
+# ------------------------------------------------------------------------------
+# P2-1: WebSocket push — nước đi/takeback/kết thúc ván được phát tức thì tới
+# đối thủ & khán giả thay vì chỉ dựa vào HTTP polling của client.
+# ------------------------------------------------------------------------------
+class MatchConnectionManager:
+    """Quản lý các kết nối WebSocket đang theo dõi từng ván đấu (in-memory)."""
+
+    def __init__(self) -> None:
+        self._channels: Dict[str, Any] = {}
+
+    async def connect(self, match_id: str, websocket: WebSocket) -> None:
+        await websocket.accept()
+        self._channels.setdefault(match_id, set()).add(websocket)
+
+    def disconnect(self, match_id: str, websocket: WebSocket) -> None:
+        sockets = self._channels.get(match_id)
+        if sockets is None:
+            return
+        sockets.discard(websocket)
+        if not sockets:
+            self._channels.pop(match_id, None)
+
+    async def broadcast(self, match_id: str, payload: Dict[str, Any]) -> None:
+        sockets = list(self._channels.get(match_id, ()))
+        for websocket in sockets:
+            try:
+                await websocket.send_json(payload)
+            except Exception:
+                self.disconnect(match_id, websocket)
+
+
+match_ws_manager = MatchConnectionManager()
+
+
+async def _broadcast_match_event(match_id: str, event: str) -> None:
+    """Phát sự kiện nhẹ; client nhận được sẽ tự refetch trạng thái ván đấu."""
+    try:
+        await match_ws_manager.broadcast(
+            match_id, {"type": event, "match_id": match_id}
+        )
+    except Exception:  # noqa: BLE001 - broadcast không được làm hỏng request chính
+        pass
+
+
+@app.websocket("/api/ws/matches/{match_id}")
+async def ws_match_channel(
+    websocket: WebSocket,
+    match_id: str,
+    token: Optional[str] = None,
+) -> None:
+    """
+    Kênh realtime của 1 ván đấu. Client gửi `?token=<session token>` để xác thực
+    (WebSocket của trình duyệt không đặt được header Authorization).
+    Server push `{"type": "match_updated" | "match_finished", ...}`;
+    client nhận sự kiện thì refetch `GET /api/matches/{match_id}`.
+    """
+    if not token:
+        await websocket.close(code=4401)
+        return
+    user = db_manager.verify_token_and_get_user(token, expected_purpose="session")
+    if not user:
+        await websocket.close(code=4401)
+        return
+    if not db_manager.get_match_record(match_id):
+        await websocket.close(code=4404)
+        return
+
+    await match_ws_manager.connect(match_id, websocket)
+    try:
+        while True:
+            # Chỉ nhận heartbeat từ client; mọi dữ liệu authority đều đi qua REST API.
+            message = await websocket.receive_text()
+            if message == "ping":
+                await websocket.send_json({"type": "pong"})
+    except WebSocketDisconnect:
+        pass
+    finally:
+        match_ws_manager.disconnect(match_id, websocket)
+
+
 def _extract_bearer_token(authorization: Optional[str]) -> Optional[str]:
     if not authorization:
         return None
@@ -457,6 +537,23 @@ def get_current_user(
             detail="Phiên đăng nhập không hợp lệ, đã hết hạn hoặc đã bị thu hồi.",
         )
     return user
+
+
+def _require_match_participant(match_id: str, user: UserRecord) -> None:
+    """
+    Kiểm tra Broken Access Control (chống IDOR):
+    chỉ kỳ thủ đang tham gia ván đấu (hoặc Admin) mới được thao tác sửa đổi ván.
+    """
+    match = db_manager.get_match_record(match_id)
+    if not match:
+        raise HTTPException(status_code=404, detail="Không tìm thấy trận đấu.")
+    if user.role == "admin":
+        return
+    if user.id not in (match.white_user_id, match.black_user_id):
+        raise HTTPException(
+            status_code=403,
+            detail="Chỉ kỳ thủ đang tham gia ván đấu hoặc Admin mới được thực hiện thao tác này.",
+        )
 
 
 def get_current_admin(user: UserRecord = Depends(get_current_user)) -> UserRecord:
@@ -621,6 +718,7 @@ async def join_match_endpoint(
         joined = db_manager.join_waiting_match(req.room_code_or_id, user.id)
         details = db_manager.get_match_with_details(joined.id)
         assert details is not None
+        await _broadcast_match_event(joined.id, "match_updated")
         return details
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -646,6 +744,22 @@ async def append_match_move_endpoint(
     req: AppendMoveRequest,
     user: UserRecord = Depends(get_current_user),
 ) -> MatchWithDetailsResponse:
+    _require_match_participant(match_id, user)
+    if req.player_user_id != user.id:
+        # Chỉ được phép đi nước thay cho bên Bot AI trong ván đấu này (bot không tự gọi API).
+        proxy = db_manager.get_user_by_id(req.player_user_id)
+        match = db_manager.get_match_record(match_id)
+        if match is None:
+            raise HTTPException(status_code=404, detail="Không tìm thấy trận đấu.")
+        is_match_bot = proxy is not None and proxy.is_bot and proxy.id in (
+            match.white_user_id,
+            match.black_user_id,
+        )
+        if user.role != "admin" and not is_match_bot:
+            raise HTTPException(
+                status_code=403,
+                detail="Không được mạo danh kỳ thủ khác để đi nước.",
+            )
     try:
         detail = db_manager.append_move(match_id, req)
         board = chess.Board(detail.fen_after)
@@ -666,6 +780,7 @@ async def append_match_move_endpoint(
                 db_manager.complete_match(match_id, result=res, termination=term)
         details = db_manager.get_match_with_details(match_id)
         assert details is not None
+        await _broadcast_match_event(match_id, "match_updated")
         return details
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -681,10 +796,12 @@ async def takeback_match_endpoint(
     req: TakebackMatchRequest,
     user: UserRecord = Depends(get_current_user),
 ) -> MatchWithDetailsResponse:
+    _require_match_participant(match_id, user)
     try:
         db_manager.takeback_to_ply(match_id, req.target_ply)
         details = db_manager.get_match_with_details(match_id)
         assert details is not None
+        await _broadcast_match_event(match_id, "match_updated")
         return details
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -700,10 +817,12 @@ async def finish_match_endpoint(
     req: FinishMatchRequest,
     user: UserRecord = Depends(get_current_user),
 ) -> MatchWithDetailsResponse:
+    _require_match_participant(match_id, user)
     try:
         db_manager.complete_match(match_id, result=req.result, termination=req.termination)
         details = db_manager.get_match_with_details(match_id)
         assert details is not None
+        await _broadcast_match_event(match_id, "match_finished")
         return details
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))

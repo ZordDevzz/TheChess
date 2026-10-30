@@ -45,9 +45,56 @@ from models import (
 )
 
 DEFAULT_DB_PATH = Path(__file__).resolve().parent / "data" / "thechess.db"
-SECRET_KEY = os.environ.get(
-    "THECHESS_SECRET_KEY", "thechess-club-secret-signing-key-2026"
+DEFAULT_SECRET_KEY_FILE = (
+    Path(__file__).resolve().parent / "data" / ".secret_key"
 )
+
+
+def _load_or_create_secret_key() -> str:
+    """
+    Xác định SECRET_KEY dùng để ký token (P0-2):
+    1. Ưu tiên biến môi trường `THECHESS_SECRET_KEY`.
+    2. Ở môi trường production/staging: thiếu key -> từ chối khởi động.
+    3. Ở dev/test: tự sinh key ngẫu nhiên `secrets.token_hex(32)` một lần,
+       lưu vào file (mặc định `backend/data/.secret_key`) để token còn hiệu lực qua restart.
+    Tuyệt đối không dùng hằng số key tĩnh trong source code.
+    """
+    env_key = os.environ.get("THECHESS_SECRET_KEY", "").strip()
+    if env_key:
+        return env_key
+
+    env_name = os.environ.get("THECHESS_ENV", "development").strip().lower()
+    if env_name in ("production", "prod", "staging"):
+        raise RuntimeError(
+            "THECHESS_ENV=production nhưng thiếu THECHESS_SECRET_KEY. "
+            "Hãy đặt biến môi trường THECHESS_SECRET_KEY (ví dụ: python -c \"import secrets; print(secrets.token_hex(32))\") "
+            "trước khi khởi động máy chủ."
+        )
+
+    key_file = Path(
+        os.environ.get("THECHESS_SECRET_KEY_FILE", "").strip()
+        or DEFAULT_SECRET_KEY_FILE
+    )
+    try:
+        if key_file.exists():
+            existing = key_file.read_text(encoding="utf-8").strip()
+            if existing:
+                return existing
+        key = secrets.token_hex(32)
+        key_file.parent.mkdir(parents=True, exist_ok=True)
+        key_file.write_text(key, encoding="utf-8")
+        try:
+            os.chmod(key_file, 0o600)
+        except OSError:
+            pass
+        return key
+    except OSError:
+        # Filesystem chỉ đọc / không ghi được: dùng key tạm cho phiên chạy này
+        # (mỗi lần restart sẽ đăng xuất hết phiên, nhưng vẫn an toàn hơn key tĩnh).
+        return secrets.token_hex(32)
+
+
+SECRET_KEY = _load_or_create_secret_key()
 
 MAIA_BOT_ELOS = [1100, 1200, 1300, 1400, 1500, 1600, 1700, 1800, 1900]
 
@@ -359,13 +406,17 @@ class DatabaseManager:
     def __init__(self, db_path: Optional[os.PathLike | str] = None) -> None:
         env_path = os.environ.get("THECHESS_DB_PATH")
         self.db_path = str(db_path or env_path or DEFAULT_DB_PATH)
-        self._lock = threading.RLock()
+        # P1-2: tách riêng write-lock để các truy vấn đọc (SELECT) chạy song song,
+        # tận dụng khả năng đọc đồng thời của SQLite WAL.
+        self._write_lock = threading.RLock()
+        self._lock = self._write_lock  # tương thích ngược tên cũ
         if self.db_path != ":memory:":
             Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         self._persistent_conn: Optional[sqlite3.Connection] = None
         if self.db_path == ":memory:":
             self._persistent_conn = self._create_connection()
         self.init_schema()
+        self._user_columns: List[str] = self._load_user_columns()
         self.seed_defaults()
 
     def _create_connection(self) -> sqlite3.Connection:
@@ -379,7 +430,8 @@ class DatabaseManager:
 
     @contextmanager
     def connection(self) -> Iterator[sqlite3.Connection]:
-        with self._lock:
+        """Đường ghi: serialize toàn bộ thao tác ghi (BEGIN...COMMIT) qua `_write_lock`."""
+        with self._write_lock:
             if self._persistent_conn is not None:
                 try:
                     yield self._persistent_conn
@@ -398,8 +450,32 @@ class DatabaseManager:
                 finally:
                     conn.close()
 
+    @contextmanager
+    def read_connection(self) -> Iterator[sqlite3.Connection]:
+        """
+        Đường đọc (P1-2): với DB file WAL, mỗi lần đọc mở connection riêng và
+        KHÔNG giữ write-lock -> nhiều thread đọc song song trong khi vẫn có 1 writer.
+        Với `:memory:` (connection dùng chung) vẫn phải serialize bằng lock.
+        """
+        if self._persistent_conn is not None:
+            with self._write_lock:
+                yield self._persistent_conn
+        else:
+            conn = self._create_connection()
+            try:
+                yield conn
+            finally:
+                conn.close()
+
+    def _load_user_columns(self) -> List[str]:
+        with self.read_connection() as conn:
+            return [
+                r["name"]
+                for r in conn.execute('PRAGMA table_info("user")').fetchall()
+            ]
+
     def close(self) -> None:
-        with self._lock:
+        with self._write_lock:
             if self._persistent_conn is not None:
                 self._persistent_conn.close()
                 self._persistent_conn = None
@@ -417,7 +493,18 @@ class DatabaseManager:
         """
         now = utc_now_iso()
         admin_username = os.environ.get("THECHESS_ADMIN_USER", "admin")
-        admin_password = os.environ.get("THECHESS_ADMIN_PASSWORD", "admin123456")
+        env_admin_password = os.environ.get("THECHESS_ADMIN_PASSWORD", "").strip()
+        if env_admin_password:
+            admin_password = env_admin_password
+        else:
+            # P0-2: không dùng mật khẩu mặc định tĩnh — sinh ngẫu nhiên ở lần chạy đầu
+            admin_password = secrets.token_urlsafe(12)
+            print(
+                f"[TheChess] Đã tạo tài khoản Admin '{admin_username}' với mật khẩu "
+                f"ngẫu nhiên (chỉ hiển thị 1 lần này): {admin_password}\n"
+                f"[TheChess] Đặt biến môi trường THECHESS_ADMIN_PASSWORD để tự chỉ định.",
+                flush=True,
+            )
 
         with self.connection() as conn:
             row = conn.execute(
@@ -624,21 +711,21 @@ class DatabaseManager:
     # Nghiệp vụ Bảng `user` (Chỉ Admin cấp tài khoản)
     # ------------------------------------------------------------------
     def get_user_by_id(self, user_id: str) -> Optional[UserRecord]:
-        with self.connection() as conn:
+        with self.read_connection() as conn:
             row = conn.execute(
                 'SELECT * FROM "user" WHERE id = ?', (user_id,)
             ).fetchone()
             return self._row_to_user(row) if row else None
 
     def get_user_by_username(self, username: str) -> Optional[UserRecord]:
-        with self.connection() as conn:
+        with self.read_connection() as conn:
             row = conn.execute(
                 'SELECT * FROM "user" WHERE username = ?', (username,)
             ).fetchone()
             return self._row_to_user(row) if row else None
 
     def list_users(self, include_bots: bool = True) -> List[UserRecord]:
-        with self.connection() as conn:
+        with self.read_connection() as conn:
             if include_bots:
                 rows = conn.execute(
                     'SELECT * FROM "user" ORDER BY is_bot ASC, rating DESC, username ASC'
@@ -1378,9 +1465,17 @@ class DatabaseManager:
             ).fetchone()
             return self._row_to_match(updated)
 
+    def get_match_record(self, match_id: str) -> Optional[MatchRecord]:
+        """Lấy bản ghi `match` đơn lẻ (nhẹ, không join `match_detail`)."""
+        with self.read_connection() as conn:
+            row = conn.execute(
+                'SELECT * FROM "match" WHERE id = ?', (match_id,)
+            ).fetchone()
+            return self._row_to_match(row) if row else None
+
     def get_match_with_details(self, match_id: str) -> Optional[MatchWithDetailsResponse]:
         """Lấy toàn bộ thông tin `match`, 2 người chơi và danh sách `match_detail` (mainline + variations)."""
-        with self.connection() as conn:
+        with self.read_connection() as conn:
             match_row = conn.execute(
                 'SELECT * FROM "match" WHERE id = ?', (match_id,)
             ).fetchone()
@@ -1423,7 +1518,7 @@ class DatabaseManager:
 
     def get_user_matches(self, user_id: str, limit: int = 50) -> List[MatchRecord]:
         """Lấy danh sách lịch sử ván đấu của một `user` (mới nhất trước)."""
-        with self.connection() as conn:
+        with self.read_connection() as conn:
             rows = conn.execute(
                 """
                 SELECT * FROM "match"
@@ -1757,11 +1852,21 @@ class DatabaseManager:
             params.extend([user_id, user_id])
         params.append(limit)
 
-        with self.connection() as conn:
+        # P1-2: JOIN 1 lần lấy cả 2 kỳ thủ thay vì N+1 query từng user.
+        w_select = ", ".join(
+            f'w."{col}" AS "w__{col}"' for col in self._user_columns
+        )
+        b_select = ", ".join(
+            f'b."{col}" AS "b__{col}"' for col in self._user_columns
+        )
+
+        with self.read_connection() as conn:
             rows = conn.execute(
                 f"""
-                SELECT m.*
+                SELECT m.*, {w_select}, {b_select}
                 FROM "match" m
+                JOIN "user" w ON w.id = m.white_user_id
+                JOIN "user" b ON b.id = m.black_user_id
                 WHERE {where_clause}
                 ORDER BY COALESCE(m.last_move_at, m.created_at) DESC
                 LIMIT ?
@@ -1769,22 +1874,15 @@ class DatabaseManager:
                 tuple(params),
             ).fetchall()
 
-            user_cache: Dict[str, UserRecord] = {}
-
-            def get_u(uid: str) -> UserRecord:
-                if uid not in user_cache:
-                    u_row = conn.execute(
-                        'SELECT * FROM "user" WHERE id = ?', (uid,)
-                    ).fetchone()
-                    assert u_row is not None
-                    user_cache[uid] = self._row_to_user(u_row)
-                return user_cache[uid]
-
             items: List[MatchSummaryItem] = []
             for r in rows:
                 m = self._row_to_match(r)
-                wp = get_u(m.white_user_id)
-                bp = get_u(m.black_user_id)
+                wp = self._row_to_user(
+                    {col: r[f"w__{col}"] for col in self._user_columns}
+                )
+                bp = self._row_to_user(
+                    {col: r[f"b__{col}"] for col in self._user_columns}
+                )
                 items.append(
                     MatchSummaryItem(
                         match=m,
@@ -1797,7 +1895,7 @@ class DatabaseManager:
 
     def get_system_stats(self) -> Dict[str, int]:
         """Thống kê tổng quan phục vụ Sảnh (Home) và Admin UI."""
-        with self.connection() as conn:
+        with self.read_connection() as conn:
             total_humans = conn.execute(
                 'SELECT COUNT(*) AS c FROM "user" WHERE is_bot = 0'
             ).fetchone()["c"]
@@ -1956,7 +2054,7 @@ class DatabaseManager:
         nếu bàn đang xem là trận biểu diễn AI vs AI đang `playing`, tự động đi tiếp nước cờ
         để bàn cờ luôn sống động mà không phụ thuộc vào việc có ai đang mở màn hình Sảnh hay không.
         """
-        with self.connection() as conn:
+        with self.read_connection() as conn:
             m_row = conn.execute(
                 'SELECT * FROM "match" WHERE id = ?', (match_id,)
             ).fetchone()

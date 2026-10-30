@@ -1,0 +1,25 @@
+# Git
+.git/
+.gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+backend/.venv/
+.pytest_cache/
+backend/data/
+
+# Node / Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/tsconfig.tsbuildinfo
+
+# Engines & weights (tải trong lúc build image bằng engines/setup_engines.py)
+engines/*
+!engines/setup_engines.py
+
+# Docs & misc
+docs/
+doc/
+*.log
+.DS_Store

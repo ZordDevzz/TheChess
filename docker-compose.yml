@@ -1,0 +1,45 @@
+# =============================================================================
+# TheChess — docker-compose (P2-3)
+# Chạy production:  docker compose up -d --build
+# Yêu cầu bắt buộc: export THECHESS_SECRET_KEY=$(python3 -c "import secrets;print(secrets.token_hex(32))")
+# =============================================================================
+
+services:
+  thechess:
+    build:
+      context: .
+      # Đặt --build-arg SKIP_ENGINES=1 để bỏ tải Stockfish/Maia (image nhẹ, chỉ API thuần)
+      args:
+        SKIP_ENGINES: "0"
+    image: thechess:latest
+    container_name: thechess
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      THECHESS_ENV: production
+      # Bắt buộc có ở production — container từ chối khởi động nếu thiếu
+      THECHESS_SECRET_KEY: ${THECHESS_SECRET_KEY:?Đặt THECHESS_SECRET_KEY trước khi chạy}
+      # Mật khẩu admin lần chạy đầu; bỏ trống -> sinh ngẫu nhiên và in ra log 1 lần
+      THECHESS_ADMIN_PASSWORD: ${THECHESS_ADMIN_PASSWORD:-}
+      THECHESS_ALLOWED_ORIGINS: ${THECHESS_ALLOWED_ORIGINS:-http://localhost:8000}
+    volumes:
+      - thechess_data:/app/backend/data
+
+  # ---------------------------------------------------------------------------
+  # P2-3 (tương lai): PostgreSQL khi hoàn tất migration SQLAlchemy async
+  # (xem docs/POSTGRES_MIGRATION.md). Bật kèm PgBouncer khi cần connection pool.
+  # ---------------------------------------------------------------------------
+  # postgres:
+  #   image: postgres:16-alpine
+  #   restart: unless-stopped
+  #   environment:
+  #     POSTGRES_DB: thechess
+  #     POSTGRES_USER: thechess
+  #     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+  #   volumes:
+  #     - pg_data:/var/lib/postgresql/data
+
+volumes:
+  thechess_data:
+  # pg_data:

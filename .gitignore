@@ -19,3 +19,4 @@ engines/weights/
 *.log
 .DS_Store
 backend/data/*.db*
+backend/data/.secret_key
