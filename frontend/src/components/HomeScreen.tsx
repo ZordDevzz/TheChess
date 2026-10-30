@@ -268,10 +268,23 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
     return map;
   }, [lobby]);
 
+  /** Kỳ thủ đang giữ phòng chờ (creator đặt cả 2 slot bằng mình khi chờ join) */
+  const waitingByUserId = React.useMemo(() => {
+    const map = new Map<string, string>();
+    if (!lobby) return map;
+    for (const item of lobby.waiting_matches) {
+      map.set(item.match.white_user_id, item.match.id);
+      map.set(item.match.black_user_id, item.match.id);
+    }
+    return map;
+  }, [lobby]);
+
   const playersList = lobby?.online_players || [currentUser];
   const onlineCount = playersList.filter(
     (u) =>
-      isPlayerRecentlyOnline(u, currentUser.id) || activeMatchByUserId.has(u.id)
+      isPlayerRecentlyOnline(u, currentUser.id) ||
+      activeMatchByUserId.has(u.id) ||
+      waitingByUserId.has(u.id)
   ).length;
 
   const handleSelectChallengePlayer = (player: UserRecord) => {
@@ -682,9 +695,11 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                 {playersList.map((p) => {
                   const isMe = p.id === currentUser.id;
                   const activeMatchId = activeMatchByUserId.get(p.id) || null;
+                  const waitingMatchId = waitingByUserId.get(p.id) || null;
                   const online =
                     isPlayerRecentlyOnline(p, currentUser.id) ||
-                    Boolean(activeMatchId);
+                    Boolean(activeMatchId) ||
+                    Boolean(waitingMatchId);
                   const isTargetChallenged = challengedPlayer?.id === p.id;
 
                   return (
@@ -705,6 +720,8 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                           className={`w-2.5 h-2.5 rounded-full shrink-0 ${
                             activeMatchId
                               ? 'bg-amber-400 animate-pulse'
+                              : waitingMatchId
+                              ? 'bg-sky-400'
                               : online
                               ? 'bg-emerald-400'
                               : 'bg-ink-3'
@@ -736,6 +753,30 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                                 <span className="text-amber-300">Đang đấu</span>
                               </>
                             )}
+                            {!activeMatchId && waitingMatchId && (
+                              <>
+                                <span>·</span>
+                                <span className="text-sky-300">Phòng chờ</span>
+                              </>
+                            )}
+                            {!activeMatchId && !waitingMatchId && online && (
+                              <>
+                                <span>·</span>
+                                <span className="text-emerald-300">
+                                  Trực tuyến
+                                </span>
+                              </>
+                            )}
+                            {!activeMatchId &&
+                              !waitingMatchId &&
+                              !online && (
+                                <>
+                                  <span>·</span>
+                                  <span className="text-ink-3">
+                                    Ngoại tuyến
+                                  </span>
+                                </>
+                              )}
                           </div>
                         </div>
                       </div>

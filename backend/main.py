@@ -13,6 +13,7 @@ import subprocess
 import time
 import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -810,14 +811,42 @@ async def get_lobby(
     all_users = db_manager.list_users(include_bots=True)
     bots = [u for u in all_users if u.is_bot]
     human_players = [u for u in all_users if not u.is_bot and u.is_active]
-    human_players.sort(
-        key=lambda u: (
-            1 if u.last_seen_at else 0,
-            u.last_seen_at or "",
-            u.rating,
-        ),
-        reverse=True,
-    )
+
+    # Phân loại presence + sort ỔN ĐỊNH cho danh sách Kỳ thủ trên Sảnh.
+    # Trước đây sort theo last_seen_at — trường này bị cập nhật ở MỌI request
+    # (verify token) nên thứ tự nhảy liên tục mỗi lần lobby refetch.
+    # Giờ: Đang đấu > Phòng chờ > Trực tuyến (5 phút) > Ngoại tuyến,
+    # trong nhóm xếp theo Elo giảm dần (tie-break username) — không phụ thuộc
+    # trường nào volatile.
+    playing_ids = {
+        uid
+        for m in human_live
+        for uid in (m.match.white_user_id, m.match.black_user_id)
+        if uid
+    }
+    waiting_ids = {
+        uid
+        for w in waiting
+        for uid in (w.match.white_user_id, w.match.black_user_id)
+        if uid
+    }
+    now_ts = time.time()
+
+    def _presence_rank(u) -> int:  # 0 = hoạt động nhất
+        if u.id in playing_ids:
+            return 0
+        if u.id in waiting_ids:
+            return 1
+        if u.last_seen_at:
+            try:
+                seen = datetime.fromisoformat(u.last_seen_at).timestamp()
+                if now_ts - seen <= 5 * 60:
+                    return 2
+            except ValueError:
+                pass
+        return 3
+
+    human_players.sort(key=lambda u: (_presence_rank(u), -u.rating, u.username))
 
     return {
         "waiting_matches": waiting,
