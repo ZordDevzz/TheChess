@@ -501,6 +501,28 @@ def test_vs_ai_cannot_proxy_for_non_participant_bot(client, players):
     assert resp.status_code == 403
 
 
+def test_create_match_accepts_bot_username_as_user_id(client, players):
+    """Regression: frontend truyền username bot (`bot_maia_1500`) làm user_id phía AI.
+
+    Trước đây create_match chỉ tra theo id (UUID) -> KeyError -> 400 BadRequest
+    khi tạo trận vs máy từ trang chủ.
+    """
+    alice = players["alice"]
+    created = create_match(
+        client,
+        alice["headers"],
+        mode="vs_ai",
+        status="playing",
+        white_user_id=alice["id"],
+        black_user_id="bot_maia_1500",
+        generate_room_code=False,
+    )
+    assert created["black_player"]["username"] == "bot_maia_1500"
+    # Id trong match phải được chuẩn hóa thành UUID thật của bot
+    assert created["match"]["black_user_id"] != "bot_maia_1500"
+    assert len(created["match"]["black_user_id"]) == 36
+
+
 # ---------------------------------------------------------------------------
 # Quick-Link lifecycle: link phải sống đủ 14 ngày trừ khi Admin thu hồi/reset
 # ---------------------------------------------------------------------------

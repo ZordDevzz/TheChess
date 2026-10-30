@@ -2,6 +2,16 @@
 """
 Script tải tự động Stockfish (Linux x86-64 AVX2) và bộ trọng số Maia Chess (1100 - 1900)
 về thư mục /home/zord/src/TheChess/engines/
+
+Lc0 (để chạy Maia neural net thật — không có bản prebuilt cho Linux):
+    pip install meson ninja scipy-openblas64
+    git clone --depth 1 --branch v0.32.1 https://github.com/LeelaChessZero/lc0.git
+    cd lc0 && meson setup build --buildtype release \
+      -Dopenblas_include=$(python -c "import scipy_openblas64,os;print(os.path.join(os.path.dirname(scipy_openblas64.__file__),'include'))") \
+      -Dopenblas_libdirs=$(python -c "import scipy_openblas64,os;print(os.path.join(os.path.dirname(scipy_openblas64.__file__),'lib'))")
+    ninja -C build && cp build/lc0 /path/to/TheChess/engines/lc0
+Không có engines/lc0, hệ thống tự fallback sang chế độ mô phỏng `human_policy_sampling`
+(Stockfish + profile Elo) — vẫn chơi được nhưng không phải phân phối nước đi Maia thật.
 """
 import json
 import os

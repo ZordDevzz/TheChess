@@ -872,14 +872,22 @@ class DatabaseManager:
         now = utc_now_iso()
 
         with self.connection() as conn:
+            # Chấp nhận cả user id (UUID) lẫn username — frontend truyền
+            # `bot_maia_1500` / `bot_stockfish` (username của bot) làm id phía đối thủ.
             white_row = conn.execute(
-                'SELECT id, rating FROM "user" WHERE id = ?', (req.white_user_id,)
+                'SELECT id, rating FROM "user" WHERE id = ? OR username = ?',
+                (req.white_user_id, req.white_user_id),
             ).fetchone()
             black_row = conn.execute(
-                'SELECT id, rating FROM "user" WHERE id = ?', (req.black_user_id,)
+                'SELECT id, rating FROM "user" WHERE id = ? OR username = ?',
+                (req.black_user_id, req.black_user_id),
             ).fetchone()
             if not white_row or not black_row:
                 raise KeyError("white_user_id hoặc black_user_id không tồn tại trong bảng user.")
+
+            # Luôn lưu id chuẩn hóa (UUID) — nếu caller truyền username, thay bằng id thật.
+            white_id = white_row["id"]
+            black_id = black_row["id"]
 
             match_id = str(uuid.uuid4())
             room_code = (
@@ -915,8 +923,8 @@ class DatabaseManager:
                     req.mode,
                     req.status,
                     1 if req.is_rated else 0,
-                    req.white_user_id,
-                    req.black_user_id,
+                    white_id,
+                    black_id,
                     white_row["rating"],
                     black_row["rating"],
                     req.ai_elo_override,
