@@ -199,6 +199,31 @@ def test_tournament_runs_all_matches_and_ranks(lab) -> None:
     assert total_points == 3.0  # 3 trận phân định thắng/thua
 
 
+def test_spawn_dedupe_shared_task(lab) -> None:
+    """Regression (reboot): 2 nơi cùng spawn runner cho 1 match phải dùng chung
+    1 task. Trước đây _run_tournament chạy _run_match inline (không nằm trong
+    _tasks) nên start()/ensure_exhibition spawn thêm runner thứ 2 chạy song
+    song -> append chéo lượt -> PermissionError 'Không đúng lượt người chơi'."""
+    manager, _, _ = lab
+
+    async def slow() -> None:
+        await asyncio.sleep(0.05)
+
+    async def scenario() -> None:
+        t1 = manager._spawn("m-race", slow())
+        c2 = slow()  # coroutine dự phòng — sẽ bị close nếu dedupe không dùng
+        t2 = manager._spawn("m-race", c2)
+        assert t1 is t2, "phải tái dùng task đang chạy cho cùng key"
+        c2.close()
+        await t1
+        # task xong rồi -> spawn mới được tạo task khác
+        t3 = manager._spawn("m-race", slow())
+        assert t3 is not t1
+        await t3
+
+    asyncio.run(scenario())
+
+
 def test_tournament_accepts_full_roster(lab) -> None:
     """Regression: bot_ids từng bị giới hạn max_length=8 -> chọn cả roster
     10 bot (Maia 1100-1900 + Stockfish) bị 422 Unprocessable Entity."""

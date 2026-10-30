@@ -180,11 +180,21 @@ class LabManager:
             task.cancel()
         self._tasks.clear()
 
-    def _spawn(self, key: str, coro) -> None:
+    def _spawn(self, key: str, coro) -> asyncio.Task:
+        """Spawn task nền theo key, chống trùng: task cũ còn sống thì dùng lại.
+
+        Trả về task để caller (vd _run_tournament) await chung runner của match
+        thay vì tự chạy _run_match inline — runner inline không nằm trong
+        self._tasks sẽ bị _spawn nơi khác tạo runner thứ 2 chạy song song
+        (double-runner append chéo lượt -> PermissionError 'Không đúng lượt').
+        """
         existing = self._tasks.get(key)
         if existing is not None and not existing.done():
-            return
-        self._tasks[key] = asyncio.get_running_loop().create_task(coro)
+            coro.close()  # dedupe: coroutine mới không dùng — đóng tránh warning
+            return existing
+        task = asyncio.get_running_loop().create_task(coro)
+        self._tasks[key] = task
+        return task
 
     # ------------------------------------------------------------------
     # Tạo trận / tạo giải
@@ -477,7 +487,21 @@ class LabManager:
                     changed = True
                     self._db.update_lab_tournament(tid, schedule=schedule)
 
-                await self._run_match(slot["match_id"])
+                # Chạy match qua _spawn (dedupe theo match_id): sau reboot,
+                # start() có thể đã spawn runner cho chính match này — phải
+                # await chung 1 task, không chạy song song thứ 2.
+                try:
+                    await self._spawn(
+                        slot["match_id"], self._run_match(slot["match_id"])
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:  # noqa: BLE001 - 1 match lỗi không giết cả giải
+                    print(
+                        f"[Lab] Lỗi chạy trận {slot['match_id']} trong giải {tid}: {e!r}",
+                        flush=True,
+                    )
+                    return
                 m = self._db.get_match_record(slot["match_id"])
                 if m is None or m.status != "finished":
                     return  # match bị admin abort giữa chừng -> dừng giải
