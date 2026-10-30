@@ -357,11 +357,15 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
 
   return (
     <div className="flex-1 min-h-0 w-full overflow-y-auto lg:overflow-hidden p-3.5 md:p-4">
-      <div className="max-w-[1480px] mx-auto h-full grid grid-cols-1 lg:grid-cols-12 gap-4">
+      {/* Bố cục: lg = 2 cột (7fr/5fr) + dải chat dưới đáy;
+          2xl+ = 3 cột với Chat Sảnh là rail phải full-height (không trôi
+          khi cuộn — chat là nội dung ambient, tham chiếu chess.com lobby).
+          max-w 1800 (tăng từ 1480) nhả đủ diện tích cho cột chat thứ 3. */}
+      <div className="max-w-[1800px] mx-auto h-full grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,7fr)_minmax(0,5fr)] lg:grid-rows-[minmax(0,1fr)_auto] 2xl:grid-cols-[minmax(0,7fr)_minmax(0,4fr)_320px] 2xl:grid-rows-[minmax(0,1fr)]">
         {/* =================================================================
-            CỘT TRÁI (7/12): PHÒNG CHỜ + TRỰC TIẾP TRÊN SẢNH + KỲ THỦ ONLINE
+            CỘT TRÁI (7fr): PHÒNG CHỜ + TRỰC TIẾP TRÊN SẢNH + KỲ THỦ ONLINE
            ================================================================= */}
-        <section className="lg:col-span-7 flex flex-col gap-3.5 min-h-0 lg:h-full overflow-hidden">
+        <section className="lg:col-start-1 lg:row-start-1 flex flex-col gap-3.5 min-h-0 lg:h-full overflow-hidden">
           {/* 1. Thanh Phòng chờ & Nhập mã phòng */}
           <div className="bg-panel border border-line rounded-xl p-3 shrink-0 space-y-2.5">
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -828,20 +832,14 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                   );
                 })}
               </div>
-
-              {/* Chat Sảnh — mọi thành viên, khối dưới danh sách Kỳ thủ */}
-              <LobbyChat
-                currentUser={currentUser}
-                knownUsers={[...playersList, ...(lobby?.bots ?? [])]}
-              />
             </div>
           </div>
         </section>
 
         {/* =================================================================
-            CỘT PHẢI (5/12): MENU TẠO TRẬN MỚI (TRÊN) + LỊCH SỬ ĐẤU (DƯỚI)
+            CỘT PHẢI (lg: 5fr / 2xl: 4fr): TẠO TRẬN MỚI (TRÊN) + LỊCH SỬ ĐẤU
            ================================================================= */}
-        <section className="lg:col-span-5 flex flex-col gap-3.5 min-h-0 lg:h-full overflow-hidden">
+        <section className="lg:col-start-2 lg:row-start-1 flex flex-col gap-3.5 min-h-0 lg:h-full overflow-hidden">
           {/* 1. Khối trên: Menu Tạo trận mới (đầy đủ tùy chỉnh như PreMatchDialog) */}
           <div className="bg-panel border border-line rounded-xl p-3.5 space-y-2.5 lg:max-h-[64%] overflow-y-auto shrink-0">
             <div className="flex items-center justify-between">
@@ -1487,6 +1485,18 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
               )}
             </div>
           </div>
+        </section>
+
+        {/* =================================================================
+            CHAT SẢNH — lg: dải full-width dưới đáy; 2xl+: rail phải
+            full-height (cuộn nội bộ, không trôi mất khi duyệt Sảnh)
+           ================================================================= */}
+        <section className="lg:col-span-2 lg:row-start-2 lg:h-64 2xl:col-start-3 2xl:col-span-1 2xl:row-start-1 2xl:h-full flex">
+          <LobbyChat
+            currentUser={currentUser}
+            knownUsers={[...playersList, ...(lobby?.bots ?? [])]}
+            fillHeight
+          />
         </section>
       </div>
 

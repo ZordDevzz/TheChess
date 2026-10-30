@@ -20,8 +20,10 @@ interface ChatBoxProps {
   locked?: boolean;
   lockedHint?: string;
   canModerate?: boolean;
-  /** Chiều cao vùng tin nhắn (tailwind class) */
+  /** Chiều cao vùng tin nhắn (tailwind class) — bỏ qua khi fillHeight */
   heightClass?: string;
+  /** Chiếm trọn chiều cao cha (rail chat), vùng tin nhắn co giãn theo */
+  fillHeight?: boolean;
   placeholder?: string;
 }
 
@@ -33,6 +35,7 @@ export const ChatBox: React.FC<ChatBoxProps> = ({
   lockedHint = 'Kênh chat đã khóa.',
   canModerate = false,
   heightClass = 'h-56',
+  fillHeight = false,
   placeholder = 'Nhập tin nhắn… (Enter để gửi)',
 }) => {
   const { messages, sending, error, send, removeMessage } = useChat(
@@ -57,10 +60,14 @@ export const ChatBox: React.FC<ChatBoxProps> = ({
   };
 
   return (
-    <div className="flex flex-col min-h-0">
+    <div
+      className={`flex flex-col min-h-0 ${fillHeight ? 'flex-1' : ''}`}
+    >
       <div
         ref={scrollRef}
-        className={`${heightClass} overflow-y-auto space-y-1.5 pr-1 text-xs`}
+        className={`${
+          fillHeight ? 'flex-1 min-h-0' : heightClass
+        } overflow-y-auto space-y-1.5 pr-1 text-xs`}
       >
         {messages.length === 0 && (
           <div className="text-ink-3 text-center py-6">Chưa có tin nhắn nào.</div>
