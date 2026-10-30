@@ -10,10 +10,12 @@ import {
   GameOverInfo,
   GameModeId,
   GamePhase,
+  MatchDetailRecord,
   ModePreset,
   MoveRecord,
   PlayerInfo,
 } from './types';
+import { CLASSIFICATION_META } from './theme/semantic';
 
 export const STARTING_FEN =
   'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
@@ -479,4 +481,98 @@ export function clearSavedGame(): void {
   } catch {
     // ignore
   }
+}
+
+// ---------------------------------------------------------------------------
+// Board Editor: ánh xạ FEN placement ↔ board map (ô "a1".."h8" → mã quân "wQ")
+// ---------------------------------------------------------------------------
+
+const FILES = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
+const RANKS = ['8', '7', '6', '5', '4', '3', '2', '1'];
+
+export function boardMapToFenPlacement(map: Record<string, string>): string {
+  const rows: string[] = [];
+  for (const r of RANKS) {
+    let empty = 0;
+    let rowStr = '';
+    for (const f of FILES) {
+      const sq = `${f}${r}`;
+      const p = map[sq];
+      if (!p) {
+        empty++;
+      } else {
+        if (empty > 0) {
+          rowStr += String(empty);
+          empty = 0;
+        }
+        const color = p[0];
+        const role = p[1];
+        rowStr += color === 'w' ? role.toUpperCase() : role.toLowerCase();
+      }
+    }
+    if (empty > 0) rowStr += String(empty);
+    rows.push(rowStr);
+  }
+  return rows.join('/');
+}
+
+export function fenToBoardMap(fen: string): Record<string, string> {
+  const map: Record<string, string> = {};
+  const placement = fen.trim().split(/\s+/)[0] || '';
+  const rows = placement.split('/');
+  if (rows.length !== 8) return map;
+
+  for (let rIdx = 0; rIdx < 8; rIdx++) {
+    const rank = RANKS[rIdx];
+    let fIdx = 0;
+    for (const ch of rows[rIdx]) {
+      if (fIdx >= 8) break;
+      if (ch >= '1' && ch <= '8') {
+        fIdx += parseInt(ch, 10);
+      } else {
+        const isUpper = ch === ch.toUpperCase();
+        const color = isUpper ? 'w' : 'b';
+        const role = ch.toUpperCase();
+        map[`${FILES[fIdx]}${rank}`] = `${color}${role}`;
+        fIdx++;
+      }
+    }
+  }
+  return map;
+}
+
+// ---------------------------------------------------------------------------
+// Multiplayer: dựng MoveRecord frontend từ bản ghi chi tiết MatchDetailRecord
+// ---------------------------------------------------------------------------
+
+export function detailRecordsToMoveRecords(details: MatchDetailRecord[]): MoveRecord[] {
+  return details.map((d) => {
+    const cls = d.classification ?? undefined;
+    const color =
+      cls && CLASSIFICATION_META[cls] ? CLASSIFICATION_META[cls].color : undefined;
+    const symbol =
+      d.symbol ||
+      (cls && CLASSIFICATION_META[cls] ? CLASSIFICATION_META[cls].symbol : undefined);
+    return {
+      ply: d.ply,
+      moveNumber: d.move_number,
+      turn: d.turn,
+      uci: d.uci,
+      san: d.san,
+      from: d.from_sq,
+      to: d.to_sq,
+      fenBefore: d.fen_before,
+      fenAfter: d.fen_after,
+      cp: d.cp,
+      mate: d.mate,
+      winPercentWhite: d.win_percent_white ?? undefined,
+      classification: cls,
+      symbol,
+      color,
+      bestMoveUci: d.best_move_uci,
+      bestMoveSan: d.best_move_san,
+      accuracy: d.accuracy ?? undefined,
+      winLoss: d.win_loss ?? undefined,
+    };
+  });
 }

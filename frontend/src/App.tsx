@@ -1,36 +1,26 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo, Suspense } from 'react';
 import { Chess, Square as ChessSquare } from 'chess.js';
 import { Chessboard } from 'react-chessboard';
 import type { Arrow, Square } from 'react-chessboard/dist/chessboard/types';
 import {
   analyzePosition,
   appendMatchMoveApi,
-  changePasswordApi,
   classifySingleMove,
-  clearAuthToken,
   createMatchApi,
-  fetchLobbyApi,
-  fetchMeApi,
   fetchStatus,
   finishMatchApi,
-  getAuthToken,
   getMatchApi,
   joinMatchApi,
-  loginApi,
-  quickLoginApi,
   requestAIMove,
   saveMatchReviewApi,
-  setAuthToken,
   takebackMatchApi,
 } from './api';
 import {
-  AnalysisResponse,
   AppScreen,
   EngineStatus,
   GameConfig,
   GameOverInfo,
   GamePhase,
-  MatchDetailRecord,
   MatchRecord,
   MatchWithDetailsResponse,
   MoveRecord,
@@ -41,38 +31,34 @@ import {
 import { EnginePanel } from './components/EnginePanel';
 import { MoveHistory } from './components/MoveHistory';
 import { EvalGraph } from './components/EvalGraph';
-import { Toasts, useToasts } from './components/Toasts';
+import { Toasts, useToasts, ToastItem, ToastKind } from './components/Toasts';
 import { PromotionDialog } from './components/PromotionDialog';
 import { PlayerCard } from './components/PlayerCard';
 import { CapturedBar } from './components/CapturedRail';
 import { PreMatchDialog } from './components/PreMatchDialog';
 import { GameOverDialog } from './components/GameOverDialog';
-import { ReviewScreen } from './components/ReviewScreen';
 import { LoginScreen, ChangePasswordModal } from './components/LoginScreen';
 import { UserDropdownMenu } from './components/UserDropdownMenu';
 import { HomeScreen, QuickCreateMatchOptions } from './components/HomeScreen';
-import { AdminScreen } from './components/AdminScreen';
 import {
   STARTING_FEN,
   ANALYSIS_LEVEL_LABELS,
   MODE_PRESETS,
   alignPlayersWithColor,
+  boardMapToFenPlacement,
   buildPgn,
   clearSavedGame,
+  detailRecordsToMoveRecords,
   detectGameOver,
   downloadPgn,
+  fenToBoardMap,
   getMaterialInfo,
   loadSavedGame,
   makeDefaultPlayers,
   resolveFeatureVisibility,
   saveGame,
 } from './gameUtils';
-import {
-  BoardEditor,
-  EditorTool,
-  fenToBoardMap,
-  boardMapToFenPlacement,
-} from './components/BoardEditor';
+import type { EditorTool } from './components/BoardEditor';
 import {
   ARROW_COLORS,
   CLASSIFICATION_META,
@@ -84,41 +70,30 @@ import { ThemePicker } from './theme/ThemePicker';
 import { useTheme } from './theme/ThemeProvider';
 import { useBoardSize } from './hooks/useBoardSize';
 import { useGameReview } from './hooks/useGameReview';
+import { useChessClock } from './hooks/useChessClock';
+import { useMatchSync } from './hooks/useMatchSync';
+import { useAnalysisController } from './hooks/useAnalysisController';
+import { AuthProvider, useAuth } from './context/AuthContext';
+
+// Code splitting (P2-2): các màn hình nặng chỉ tải khi cần tới
+const AdminScreen = React.lazy(() =>
+  import('./components/AdminScreen').then((m) => ({ default: m.AdminScreen }))
+);
+const ReviewScreen = React.lazy(() =>
+  import('./components/ReviewScreen').then((m) => ({ default: m.ReviewScreen }))
+);
+const BoardEditor = React.lazy(() =>
+  import('./components/BoardEditor').then((m) => ({ default: m.BoardEditor }))
+);
+
+const LazyFallback: React.FC = () => (
+  <div className="flex-1 min-h-[200px] flex items-center justify-center text-xs font-mono text-ink-3">
+    Đang tải...
+  </div>
+);
 
 // Ván cờ đã lưu trong localStorage (nếu có), đọc một lần khi mount
 const SAVED_GAME = loadSavedGame();
-
-function detailRecordsToMoveRecords(details: MatchDetailRecord[]): MoveRecord[] {
-  return details.map((d) => {
-    const cls = d.classification ?? undefined;
-    const color =
-      cls && CLASSIFICATION_META[cls] ? CLASSIFICATION_META[cls].color : undefined;
-    const symbol =
-      d.symbol ||
-      (cls && CLASSIFICATION_META[cls] ? CLASSIFICATION_META[cls].symbol : undefined);
-    return {
-      ply: d.ply,
-      moveNumber: d.move_number,
-      turn: d.turn,
-      uci: d.uci,
-      san: d.san,
-      from: d.from_sq,
-      to: d.to_sq,
-      fenBefore: d.fen_before,
-      fenAfter: d.fen_after,
-      cp: d.cp,
-      mate: d.mate,
-      winPercentWhite: d.win_percent_white ?? undefined,
-      classification: cls,
-      symbol,
-      color,
-      bestMoveUci: d.best_move_uci,
-      bestMoveSan: d.best_move_san,
-      accuracy: d.accuracy ?? undefined,
-      winLoss: d.win_loss ?? undefined,
-    };
-  });
-}
 
 function userRecordToPlayerInfo(
   u: UserRecord | null,
@@ -147,27 +122,55 @@ function userRecordToPlayerInfo(
   };
 }
 
+interface AppShellProps {
+  toasts: ToastItem[];
+  pushToast: (msg: string, kind?: ToastKind) => void;
+  dismissToast: (id: number) => void;
+}
+
+/**
+ * App — provider ngoài cùng: toast + auth context, phần logic ván cờ
+ * nằm trong AppShell (dùng useAuth()).
+ */
 export const App: React.FC = () => {
+  const { toasts, pushToast, dismissToast } = useToasts();
+
+  return (
+    <AuthProvider pushToast={pushToast}>
+      <AppShell toasts={toasts} pushToast={pushToast} dismissToast={dismissToast} />
+    </AuthProvider>
+  );
+};
+
+const AppShell: React.FC<AppShellProps> = ({
+  toasts,
+  pushToast,
+  dismissToast,
+}) => {
   const { boardTheme } = useTheme();
   const [status, setStatus] = useState<EngineStatus | null>(null);
   const [backendError, setBackendError] = useState<string | null>(null);
 
-  // --- Auth & Điều hướng màn hình (Multiplayer V3) ---
-  const [currentUser, setCurrentUser] = useState<UserRecord | null>(null);
-  const [authChecking, setAuthChecking] = useState<boolean>(true);
-  const [loginError, setLoginError] = useState<string | null>(null);
-  const [showPasswordModal, setShowPasswordModal] = useState<boolean>(false);
+  // --- Auth (AuthContext) & Điều hướng màn hình ---
+  const {
+    currentUser,
+    authChecking,
+    loginError,
+    showPasswordModal,
+    setShowPasswordModal,
+    login,
+    logout,
+    changePassword,
+    refreshCurrentUser,
+  } = useAuth();
   const [screen, setScreen] = useState<AppScreen>('home');
   const [activeTab, setActiveTab] = useState<'play' | 'editor'>('play');
 
   // --- Trạng thái ván đấu Multiplayer ---
   const [activeMatch, setActiveMatch] = useState<MatchRecord | null>(null);
   const [isSpectator, setIsSpectator] = useState<boolean>(false);
-  const [whiteClockMs, setWhiteClockMs] = useState<number | null>(null);
-  const [blackClockMs, setBlackClockMs] = useState<number | null>(null);
   const [whiteRating, setWhiteRating] = useState<number | null>(null);
   const [blackRating, setBlackRating] = useState<number | null>(null);
-  const lastTurnStartRef = useRef<number>(Date.now());
 
   // --- Biên bản ván cờ ---
   const [initialFen, setInitialFen] = useState<string>(
@@ -210,21 +213,12 @@ export const App: React.FC = () => {
   const [hintArrow, setHintArrow] = useState<Arrow | null>(null);
   const [isAiThinking, setIsAiThinking] = useState(false);
 
-  // --- Phân tích ---
-  const [showEval, setShowEval] = useState(true);
-  const [showArrows, setShowArrows] = useState(true);
-  const [multipv, setMultipv] = useState<number>(3);
-  const [depth, setDepth] = useState<number>(15);
-  const [analysis, setAnalysis] = useState<AnalysisResponse | null>(null);
-  const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
-
   // --- Board Editor ---
   const [editorBoardMap, setEditorBoardMap] = useState<Record<string, string>>(
     () => fenToBoardMap(STARTING_FEN)
   );
   const [editorTool, setEditorTool] = useState<EditorTool>('wQ');
 
-  const { toasts, pushToast, dismissToast } = useToasts();
   const { boardStageRef, boardSize, showSideRails } = useBoardSize(
     activeTab,
     `${screen}-${authChecking}`
@@ -242,82 +236,22 @@ export const App: React.FC = () => {
     pushToast,
   });
 
-  // ------------------ Khởi tạo Auth & Quick-Link ------------------
-
-  useEffect(() => {
-    let cancelled = false;
-    const initAuth = async () => {
-      const params = new URLSearchParams(window.location.search);
-      const quickToken = params.get('q') || params.get('login_token');
-      if (quickToken) {
-        try {
-          const res = await quickLoginApi(quickToken);
-          if (cancelled) return;
-          setAuthToken(res.token);
-          window.history.replaceState({}, '', window.location.pathname);
-          setCurrentUser(res.user);
-          setAuthChecking(false);
-          pushToast(
-            `Xin chào ${res.user.display_name}! Đã đăng nhập qua Quick-Link.`,
-            'success'
-          );
-          return;
-        } catch (err) {
-          console.error('Quick-link error:', err);
-          window.history.replaceState({}, '', window.location.pathname);
-          if (!cancelled) {
-            setLoginError(
-              err instanceof Error
-                ? err.message
-                : 'Quick-Link không hợp lệ hoặc đã hết hạn.'
-            );
-          }
-        }
-      }
-
-      const existingToken = getAuthToken();
-      if (existingToken) {
-        try {
-          const me = await fetchMeApi();
-          if (!cancelled) {
-            setCurrentUser(me);
-          }
-        } catch {
-          clearAuthToken();
-        }
-      }
-      if (!cancelled) {
-        setAuthChecking(false);
-      }
-    };
-
-    initAuth();
-    return () => {
-      cancelled = true;
-    };
-  }, [pushToast]);
+  // ------------------ Auth handlers (bọc AuthContext) ------------------
 
   const handleLogin = async (username: string, password: string) => {
-    setLoginError(null);
-    const res = await loginApi(username, password);
-    setAuthToken(res.token);
-    setCurrentUser(res.user);
+    const user = await login(username, password);
     setScreen('home');
-    pushToast(`Chào mừng trở lại, ${res.user.display_name}!`, 'success');
+    pushToast(`Chào mừng trở lại, ${user.display_name}!`, 'success');
   };
 
   const handleLogout = () => {
-    clearAuthToken();
-    setCurrentUser(null);
+    logout();
     setActiveMatch(null);
     setScreen('home');
   };
 
   const handlePasswordChange = async (newPassword: string, displayName: string) => {
-    const res = await changePasswordApi(newPassword, displayName);
-    setAuthToken(res.token);
-    setCurrentUser(res.user);
-    setShowPasswordModal(false);
+    await changePassword(newPassword, displayName);
     pushToast('Đã cập nhật hồ sơ & mật khẩu thành công.', 'success');
   };
 
@@ -372,6 +306,55 @@ export const App: React.FC = () => {
     (isSpectator ||
       phase === 'finished' ||
       (phase === 'playing' && config.analysis !== 'off'));
+
+  // Hết giờ — cập nhật trạng thái ván đấu (useChessClock lo phần gọi backend)
+  const handleClockTimeout = useCallback((info: GameOverInfo) => {
+    setGameOver(info);
+    setPhase('finished');
+    setShowGameOver(true);
+  }, []);
+
+  // ------------------ Đồng hồ Fischer (useChessClock) ------------------
+
+  const {
+    whiteClockMs,
+    blackClockMs,
+    setWhiteClockMs,
+    setBlackClockMs,
+    lastTurnStartRef,
+    turnStartClockRef,
+    syncClockFromServer,
+    resetClocks,
+  } = useChessClock({
+    screen,
+    phase,
+    activeMatch,
+    isSpectator,
+    turn: chessInstance.turn(),
+    onTimeout: handleClockTimeout,
+  });
+
+  // ------------------ Phân tích live (useAnalysisController) ------------------
+
+  const {
+    analysis,
+    isAnalyzing,
+    showEval,
+    setShowEval,
+    showArrows,
+    setShowArrows,
+    multipv,
+    setMultipv,
+    depth,
+    setDepth,
+  } = useAnalysisController({
+    currentFen,
+    analysisEnabled,
+    activeTab,
+    isSpectator,
+    phase,
+    setMoves,
+  });
 
   // Đổi màu quân người chơi kèm đồng bộ players.w ↔ players.b (tránh lỗi ISS-01)
   const handleChangePlayerColor = useCallback(
@@ -438,9 +421,11 @@ export const App: React.FC = () => {
       setInitialFen(fenStart);
       setMoves(builtMoves);
       setCurrentPly(builtMoves.length);
-      setWhiteClockMs(m.white_clock_ms ?? m.initial_time_ms ?? null);
-      setBlackClockMs(m.black_clock_ms ?? m.initial_time_ms ?? null);
-      lastTurnStartRef.current = Date.now();
+      syncClockFromServer(
+        m.white_clock_ms ?? m.initial_time_ms ?? null,
+        m.black_clock_ms ?? m.initial_time_ms ?? null,
+        builtMoves
+      );
 
       resetReview();
       setSelectedSquare(null);
@@ -469,7 +454,7 @@ export const App: React.FC = () => {
       setActiveTab('play');
       setScreen('match');
     },
-    [resetReview]
+    [resetReview, syncClockFromServer]
   );
 
   // ------------------ Lobby Callbacks ------------------
@@ -610,182 +595,23 @@ export const App: React.FC = () => {
       });
   }, []);
 
-  // Đồng hồ Fischer đếm ngược khi ván đang playing và có giới hạn thời gian
-  useEffect(() => {
-    if (
-      screen !== 'match' ||
-      phase !== 'playing' ||
-      !activeMatch ||
-      activeMatch.status !== 'playing' ||
-      activeMatch.initial_time_ms == null
-    ) {
-      return;
-    }
-
-    const interval = window.setInterval(() => {
-      const turn = chessInstance.turn();
-      if (turn === 'w') {
-        setWhiteClockMs((prev) => (prev != null ? Math.max(0, prev - 250) : null));
-      } else {
-        setBlackClockMs((prev) => (prev != null ? Math.max(0, prev - 250) : null));
-      }
-    }, 250);
-
-    return () => window.clearInterval(interval);
-  }, [screen, phase, activeMatch, chessInstance]);
-
-  // Phát hiện hết giờ (Timeout)
-  useEffect(() => {
-    if (
-      screen !== 'match' ||
-      phase !== 'playing' ||
-      !activeMatch ||
-      activeMatch.status !== 'playing' ||
-      activeMatch.initial_time_ms == null ||
-      isSpectator
-    ) {
-      return;
-    }
-    if (whiteClockMs !== null && whiteClockMs <= 0) {
-      const info: GameOverInfo = {
-        result: '0-1',
-        reason: 'Trắng hết giờ',
-        winner: 'b',
-      };
-      setGameOver(info);
-      setPhase('finished');
-      setShowGameOver(true);
-      finishMatchApi(activeMatch.id, '0-1', 'timeout').catch(console.error);
-    } else if (blackClockMs !== null && blackClockMs <= 0) {
-      const info: GameOverInfo = {
-        result: '1-0',
-        reason: 'Đen hết giờ',
-        winner: 'w',
-      };
-      setGameOver(info);
-      setPhase('finished');
-      setShowGameOver(true);
-      finishMatchApi(activeMatch.id, '1-0', 'timeout').catch(console.error);
-    }
-  }, [screen, phase, activeMatch, whiteClockMs, blackClockMs, isSpectator]);
-
-  // Polling đồng bộ phòng chờ / đấu Online / xem trực tiếp (Spectator)
-  const movesLenRef = useRef<number>(moves.length);
-  useEffect(() => {
-    movesLenRef.current = moves.length;
-  }, [moves.length]);
-
-  useEffect(() => {
-    if (screen !== 'match' || !activeMatch || !currentUser) return;
-    const shouldPoll =
-      activeMatch.status === 'waiting' ||
-      activeMatch.mode === 'online' ||
-      isSpectator;
-    if (!shouldPoll) return;
-
-    let cancelled = false;
-    const matchId = activeMatch.id;
-    const prevStatus = activeMatch.status;
-
-    const timer = window.setInterval(async () => {
-      if (cancelled) return;
-      try {
-        const res = await getMatchApi(matchId);
-        if (cancelled) return;
-        const m = res.match;
-
-        // Phòng chờ vừa có người vào
-        if (prevStatus === 'waiting' && m.status === 'playing') {
-          hydrateMatchFromServer(res, currentUser);
-          pushToast('Đối thủ đã vào bàn! Ván đấu bắt đầu.', 'success');
-          return;
-        }
-
-        // Cập nhật biên bản nếu có nước đi mới từ đối thủ hoặc hệ thống
-        if (
-          res.moves.length !== movesLenRef.current ||
-          m.status !== prevStatus
-        ) {
-          const prevLen = movesLenRef.current;
-          setActiveMatch(m);
-          const built = detailRecordsToMoveRecords(res.moves);
-          setMoves((prevMoves) =>
-            built.map((bm) => {
-              const existing = prevMoves.find(
-                (pm) => pm.ply === bm.ply && pm.uci === bm.uci
-              );
-              if (!existing) return bm;
-              return {
-                ...bm,
-                cp: bm.cp ?? existing.cp,
-                mate: bm.mate ?? existing.mate,
-                winPercentWhite:
-                  bm.winPercentWhite ?? existing.winPercentWhite,
-                classification: bm.classification ?? existing.classification,
-                symbol: bm.symbol ?? existing.symbol,
-                color: bm.color ?? existing.color,
-              };
-            })
-          );
-          setCurrentPly((prevPly) =>
-            prevPly >= Math.max(0, prevLen - 1) ? built.length : prevPly
-          );
-          setWhiteClockMs(m.white_clock_ms ?? m.initial_time_ms ?? null);
-          setBlackClockMs(m.black_clock_ms ?? m.initial_time_ms ?? null);
-
-          if (m.status === 'finished' || m.status === 'aborted') {
-            setPhase('finished');
-            const winner =
-              m.result === '1-0' ? 'w' : m.result === '0-1' ? 'b' : null;
-            setGameOver({
-              result: m.result === '*' ? '1/2-1/2' : m.result,
-              reason: m.termination || 'Kết thúc ván đấu',
-              winner,
-            });
-            if (!isSpectator) {
-              setShowGameOver(true);
-            } else if (res.white_player?.is_bot && res.black_player?.is_bot) {
-              // Nếu đang xem trận biểu diễn AI vs AI và ván kết thúc, tự động chuyển sang ván biểu diễn mới
-              pushToast(
-                'Ván biểu diễn đã kết thúc — đang chuyển sang ván trực tiếp mới...',
-                'info'
-              );
-              window.setTimeout(async () => {
-                if (cancelled) return;
-                try {
-                  const lobbyData = await fetchLobbyApi(true);
-                  const nextLive =
-                    lobbyData.featured_match || lobbyData.live_matches[0];
-                  if (nextLive && nextLive.match.id !== matchId) {
-                    const nextRes = await getMatchApi(nextLive.match.id);
-                    hydrateMatchFromServer(nextRes, currentUser);
-                  }
-                } catch {
-                  // ignore
-                }
-              }, 2200);
-            }
-          }
-        }
-      } catch {
-        // ignore transient network errors
-      }
-    }, 1800);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [
+  // Polling đồng bộ phòng chờ / đấu Online / xem trực tiếp (useMatchSync)
+  useMatchSync({
     screen,
-    activeMatch?.id,
-    activeMatch?.status,
-    activeMatch?.mode,
+    activeMatch,
     currentUser,
     isSpectator,
+    moves,
     hydrateMatchFromServer,
     pushToast,
-  ]);
+    setActiveMatch,
+    setMoves,
+    setCurrentPly,
+    setPhase,
+    setGameOver,
+    setShowGameOver,
+    syncClockFromServer,
+  });
 
   // Tự động lưu kết quả Game Review vào DB khi hoàn tất chấm điểm
   const savedReviewMatchIdRef = useRef<string | null>(null);
@@ -813,63 +639,6 @@ export const App: React.FC = () => {
     }).catch((err) => console.error('Lỗi lưu Game Review vào DB:', err));
   }, [reviewResult, activeMatch]);
 
-  // Phân tích live — chỉ chạy khi được phép theo chế độ chơi + phase
-  const abortControllerRef = useRef<AbortController | null>(null);
-  useEffect(() => {
-    if (!analysisEnabled) {
-      setAnalysis(null);
-      setIsAnalyzing(false);
-      return;
-    }
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-    }
-    const controller = new AbortController();
-    abortControllerRef.current = controller;
-
-    const effectiveDepth =
-      isSpectator && phase === 'playing' ? Math.min(depth, 12) : depth;
-
-    setIsAnalyzing(true);
-    analyzePosition(currentFen, effectiveDepth, multipv, controller.signal)
-      .then((res) => {
-        setAnalysis(res);
-        setIsAnalyzing(false);
-        // Backfill điểm đánh giá trực tiếp vào nước đi hiện tại để biểu đồ EvalGraph cập nhật mượt
-        setMoves((prev) => {
-          let changed = false;
-          const next = prev.map((m) => {
-            if (m.fenAfter === res.fen && m.winPercentWhite === undefined) {
-              changed = true;
-              return {
-                ...m,
-                cp: res.cp,
-                mate: res.mate,
-                winPercentWhite: res.win_percent_white,
-              };
-            }
-            return m;
-          });
-          return changed ? next : prev;
-        });
-      })
-      .catch((err) => {
-        if (err.name !== 'AbortError') {
-          setIsAnalyzing(false);
-        }
-      });
-
-    return () => controller.abort();
-  }, [
-    currentFen,
-    depth,
-    multipv,
-    activeTab,
-    analysisEnabled,
-    isSpectator,
-    phase,
-  ]);
-
   // Phát hiện kết thúc ván trên bàn cờ
   useEffect(() => {
     if (phase !== 'playing') return;
@@ -886,7 +655,7 @@ export const App: React.FC = () => {
           .then((res) => {
             setActiveMatch(res.match);
             if (currentUser) {
-              fetchMeApi().then(setCurrentUser).catch(() => {});
+              refreshCurrentUser().catch(() => {});
             }
           })
           .catch((err) => console.error('Lỗi lưu kết quả ván đấu:', err));
@@ -900,6 +669,7 @@ export const App: React.FC = () => {
     activeMatch,
     isSpectator,
     currentUser,
+    refreshCurrentUser,
   ]);
 
   // Phím tắt điều hướng ván cờ: ← → Home End
@@ -1002,12 +772,14 @@ export const App: React.FC = () => {
             (whiteClockMs ?? activeMatch.initial_time_ms) + inc
           );
           setWhiteClockMs(nextMoverClock);
+          turnStartClockRef.current = blackClockMs ?? activeMatch.initial_time_ms;
         } else {
           nextMoverClock = Math.max(
             0,
             (blackClockMs ?? activeMatch.initial_time_ms) + inc
           );
           setBlackClockMs(nextMoverClock);
+          turnStartClockRef.current = whiteClockMs ?? activeMatch.initial_time_ms;
         }
       }
 
@@ -1411,8 +1183,7 @@ export const App: React.FC = () => {
   const handleNewGame = () => {
     setActiveMatch(null);
     setIsSpectator(false);
-    setWhiteClockMs(null);
-    setBlackClockMs(null);
+    resetClocks();
     setInitialFen(STARTING_FEN);
     setMoves([]);
     setCurrentPly(0);
@@ -1464,7 +1235,7 @@ export const App: React.FC = () => {
       finishMatchApi(activeMatch.id, result, 'resign')
         .then((res) => {
           setActiveMatch(res.match);
-          if (currentUser) fetchMeApi().then(setCurrentUser).catch(() => {});
+          if (currentUser) refreshCurrentUser().catch(() => {});
         })
         .catch((err) => console.error('Lỗi lưu đầu hàng:', err));
     }
@@ -1850,13 +1621,15 @@ export const App: React.FC = () => {
         />
       )}
 
-      {/* Màn hình 2: ADMIN SCREEN (Quản lý tài khoản & hệ thống) */}
+      {/* Màn hình 2: ADMIN SCREEN (Quản lý tài khoản & hệ thống) — lazy load */}
       {screen === 'admin' && (
-        <AdminScreen
-          currentUser={currentUser}
-          onOpenMatch={handleOpenLiveMatch}
-          onNotify={(msg, kind) => pushToast(msg, kind)}
-        />
+        <Suspense fallback={<LazyFallback />}>
+          <AdminScreen
+            currentUser={currentUser}
+            onOpenMatch={handleOpenLiveMatch}
+            onNotify={(msg, kind) => pushToast(msg, kind)}
+          />
+        </Suspense>
       )}
 
       {/* Màn hình 3: MATCH SCREEN (Giao diện bàn cờ hiện tại) */}
@@ -2047,16 +1820,18 @@ export const App: React.FC = () => {
             } shrink-0 min-h-[420px] md:min-h-0 md:h-full border-t md:border-t-0 md:border-l border-line bg-panel flex flex-col overflow-hidden transition-[width] duration-200`}
           >
             {activeTab === 'editor' ? (
-              <BoardEditor
-                boardMap={editorBoardMap}
-                onUpdateBoardMap={setEditorBoardMap}
-                selectedTool={editorTool}
-                onSelectTool={setEditorTool}
-                presets={status?.presets || []}
-                onApplyPosition={handleApplyCustomPosition}
-              />
+              <Suspense fallback={<LazyFallback />}>
+                <BoardEditor
+                  boardMap={editorBoardMap}
+                  onUpdateBoardMap={setEditorBoardMap}
+                  selectedTool={editorTool}
+                  onSelectTool={setEditorTool}
+                  presets={status?.presets || []}
+                  onApplyPosition={handleApplyCustomPosition}
+                />
+              </Suspense>
             ) : reviewMode ? (
-              <>
+              <Suspense fallback={<LazyFallback />}>
                 <ReviewScreen
                   onClose={() => setReviewMode(false)}
                   moves={moves}
@@ -2078,7 +1853,7 @@ export const App: React.FC = () => {
                   isReviewing={isReviewing}
                   embedded
                 />
-              </>
+              </Suspense>
             ) : (
               <>
                 <EnginePanel
