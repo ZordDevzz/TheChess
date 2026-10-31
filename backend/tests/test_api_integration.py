@@ -175,6 +175,39 @@ def test_quick_link_then_quick_login_flow(client, admin, players):
     assert me.json()["username"] == "bob"
 
 
+def test_quick_link_with_settings_must_change_password_and_reset(client, admin, players):
+    user_id = players["bob"]["id"]
+
+    # 1. Tạo link đầu tiên với must_change_password=True
+    resp1 = client.post(
+        f"/api/admin/users/{user_id}/quick-link",
+        headers=admin["headers"],
+        json={"must_change_password": True, "ttl_days": 7},
+    )
+    assert resp1.status_code == 200
+    token1 = resp1.json()["quick_login_token"]
+    assert resp1.json()["user"]["must_change_password"] is True
+
+    # 2. Tạo link thứ 2 với reset_previous_links=True và must_change_password=False
+    resp2 = client.post(
+        f"/api/admin/users/{user_id}/quick-link",
+        headers=admin["headers"],
+        json={"must_change_password": False, "reset_previous_links": True, "ttl_days": 1},
+    )
+    assert resp2.status_code == 200
+    token2 = resp2.json()["quick_login_token"]
+    assert resp2.json()["user"]["must_change_password"] is False
+
+    # Token 1 phải bị vô hiệu hóa vì reset_previous_links đã tăng epoch
+    login1 = client.post("/api/auth/quick-login", json={"login_token": token1})
+    assert login1.status_code == 401
+
+    # Token 2 phải hoạt động bình thường
+    login2 = client.post("/api/auth/quick-login", json={"login_token": token2})
+    assert login2.status_code == 200
+    assert login2.json()["user"]["must_change_password"] is False
+
+
 def test_quick_login_rejects_session_token(client, players):
     # Session token không được dùng làm quick-login token (sai `purpose`)
     resp = client.post(
@@ -264,6 +297,89 @@ def test_lobby_lists_matches_and_bots(client, players):
     assert data["bots"], "Phải seed sẵn các bot AI"
 
 
+def test_lobby_live_matches_sorting_stability_on_moves(client, players):
+    """Khi có ván đi nước mới, danh sách live_matches và featured_match không bị nhảy thứ tự."""
+    alice, bob, carol = players["alice"], players["bob"], players["carol"]
+
+    # Tạo 2 trận đang chơi
+    m1 = create_match(
+        client,
+        alice["headers"],
+        mode="online",
+        status="playing",
+        white_user_id=alice["id"],
+        black_user_id=bob["id"],
+    )["match"]
+
+    m2 = create_match(
+        client,
+        bob["headers"],
+        mode="online",
+        status="playing",
+        white_user_id=bob["id"],
+        black_user_id=alice["id"],
+    )["match"]
+
+    # Người xem độc lập (carol) xem sảnh
+    lobby1 = client.get(
+        "/api/lobby", params={"step_exhibition": "false"}, headers=carol["headers"]
+    ).json()
+
+    live_ids_1 = [item["match"]["id"] for item in lobby1["live_matches"]]
+    featured_id_1 = lobby1["featured_match"]["match"]["id"]
+    assert len(live_ids_1) >= 2
+
+    # Match ở vị trí thứ 2 đi 1 nước (cập nhật last_move_at)
+    second_match_id = live_ids_1[1]
+    second_is_m1 = second_match_id == m1["id"]
+    mover = alice if second_is_m1 else bob
+    send_move(client, mover["headers"], second_match_id, mover["id"], "e2e4")
+
+    # Fetch lại sảnh
+    lobby2 = client.get(
+        "/api/lobby", params={"step_exhibition": "false"}, headers=carol["headers"]
+    ).json()
+    live_ids_2 = [item["match"]["id"] for item in lobby2["live_matches"]]
+    featured_id_2 = lobby2["featured_match"]["match"]["id"]
+
+    # Thứ tự các bàn live và featured_match phải GIỮ NGUYÊN HOÀN TOÀN
+    assert live_ids_2 == live_ids_1
+    assert featured_id_2 == featured_id_1
+
+
+def test_lobby_waiting_matches_prioritize_direct_challenge(client, players):
+    """Phòng chờ thách đấu trực tiếp tới tôi được xếp ưu tiên hàng đầu."""
+    alice, bob, carol = players["alice"], players["bob"], players["carol"]
+
+    # Alice tạo phòng chờ công khai (chờ bất kỳ ai)
+    public_room = create_match(
+        client,
+        alice["headers"],
+        status="waiting",
+        white_user_id=alice["id"],
+        black_user_id=alice["id"],
+    )["match"]
+
+    # Carol tạo phòng thách đấu trực tiếp tới Bob
+    challenge_to_bob = create_match(
+        client,
+        carol["headers"],
+        status="waiting",
+        white_user_id=carol["id"],
+        black_user_id=bob["id"],
+    )["match"]
+
+    # Bob vào sảnh: phòng challenge_to_bob phải đứng trước public_room
+    lobby_bob = client.get(
+        "/api/lobby", params={"step_exhibition": "false"}, headers=bob["headers"]
+    ).json()
+
+    waiting_ids = [w["match"]["id"] for w in lobby_bob["waiting_matches"]]
+    assert challenge_to_bob["id"] in waiting_ids
+    assert public_room["id"] in waiting_ids
+    assert waiting_ids.index(challenge_to_bob["id"]) < waiting_ids.index(public_room["id"])
+
+
 # ---------------------------------------------------------------------------
 # IDOR / Broken Access Control regressions
 # ---------------------------------------------------------------------------
@@ -315,7 +431,7 @@ def test_outsider_finish_403(client, players):
     match = make_playing_match(client, players)
     resp = client.post(
         f"/api/matches/{match['match']['id']}/finish",
-        json={"result": "1-0", "termination": "resignation"},
+        json={"action": "resign"},
         headers=players["carol"]["headers"],
     )
     assert resp.status_code == 403
@@ -378,22 +494,24 @@ def test_participant_finish_resignation_updates_ratings(client, players):
     match_id = created["match"]["id"]
     assert send_move(client, alice["headers"], match_id, alice["id"], "e2e4").status_code == 200
 
-    # Bob (Đen) đầu hàng -> alice (Trắng) thắng
+    # Bob (Đen) đầu hàng -> SERVER tính result 1-0, alice (Trắng) thắng.
+    # Regression: trước đây client tự khai result và server tin mù (bob thua
+    # mà vẫn khai "0-1" thắng được).
     resp = client.post(
         f"/api/matches/{match_id}/finish",
-        json={"result": "0-1", "termination": "resignation"},
+        json={"action": "resign"},
         headers=bob["headers"],
     )
     assert resp.status_code == 200, resp.text
     match = resp.json()["match"]
     assert match["status"] == "finished"
-    assert match["result"] == "0-1"
-    assert match["winner_user_id"] == bob["id"]
-    assert match["termination"] == "resignation"
+    assert match["result"] == "1-0"
+    assert match["winner_user_id"] == alice["id"]
+    assert match["termination"] == "Đầu hàng"
     assert match["white_rating_delta"] is not None
     assert match["black_rating_delta"] is not None
-    assert match["white_rating_delta"] < 0
-    assert match["black_rating_delta"] > 0
+    assert match["white_rating_delta"] > 0
+    assert match["black_rating_delta"] < 0
     assert match["pgn"]
 
     # Elo của user cũng được cập nhật
@@ -688,3 +806,113 @@ def test_ws_hub_rejects_bad_token(client):
     with _pytest.raises(Exception):
         with client.websocket_connect("/api/ws?token=khong-hop-le"):
             pass
+
+
+def test_change_password_requires_current_password(client, admin):
+    """Người dùng bình thường (must_change_password=0) bắt buộc phải nhập đúng
+    current_password khi đổi mật khẩu."""
+    resp = client.post(
+        "/api/admin/users",
+        json={
+            "username": "pwd_test_user",
+            "password": "init-pass-1234",
+            "display_name": "Pwd User",
+        },
+        headers=admin["headers"],
+    )
+    assert resp.status_code == 200, resp.text
+
+    # Lần 1: must_change_password=1 -> đổi thành công không cần current_password
+    login1 = client.post(
+        "/api/auth/login",
+        json={"username": "pwd_test_user", "password": "init-pass-1234"},
+    )
+    assert login1.status_code == 200, login1.text
+    headers1 = {"Authorization": f"Bearer {login1.json()['token']}"}
+
+    r_first_change = client.post(
+        "/api/auth/change-password",
+        json={"new_password": "first-real-pass-5678"},
+        headers=headers1,
+    )
+    assert r_first_change.status_code == 200, r_first_change.text
+    headers2 = {"Authorization": f"Bearer {r_first_change.json()['token']}"}
+
+    # Lần 2: Giờ must_change_password=0. Thử đổi không kèm current_password -> 400
+    r_no_curr = client.post(
+        "/api/auth/change-password",
+        json={"new_password": "another-pass-9999"},
+        headers=headers2,
+    )
+    assert r_no_curr.status_code == 400
+    assert "mật khẩu hiện tại" in r_no_curr.text.lower()
+
+    # Thử kèm current_password SAI -> 400
+    r_wrong_curr = client.post(
+        "/api/auth/change-password",
+        json={
+            "current_password": "wrong-password",
+            "new_password": "another-pass-9999",
+        },
+        headers=headers2,
+    )
+    assert r_wrong_curr.status_code == 400
+    assert "không chính xác" in r_wrong_curr.text.lower()
+
+    # Thử kèm current_password ĐÚNG -> 200
+    r_correct = client.post(
+        "/api/auth/change-password",
+        json={
+            "current_password": "first-real-pass-5678",
+            "new_password": "final-pass-123456",
+        },
+        headers=headers2,
+    )
+    assert r_correct.status_code == 200, r_correct.text
+
+
+def test_save_match_review_idor_protection(client, players, admin):
+    """Khán giả / người lạ (stranger) không được phép ghi đè kết quả Game Review
+    của trận đấu do người khác chơi (chống Broken Access Control)."""
+    alice = players["alice"]
+    bob = players["bob"]
+    carol = players["carol"]
+
+    # Tạo trận giữa Alice và Bob
+    r_match = client.post(
+        "/api/matches",
+        json={
+            "mode": "online",
+            "status": "playing",
+            "white_user_id": alice["id"],
+            "black_user_id": bob["id"],
+        },
+        headers=alice["headers"],
+    )
+    assert r_match.status_code == 200, r_match.text
+    match_id = r_match.json()["match"]["id"]
+
+    payload = {
+        "white_accuracy": 99.9,
+        "black_accuracy": 12.3,
+        "review_summary": {"best": 10},
+        "ply_evaluations": [],
+    }
+
+    # Carol (người ngoài cuộc / khán giả) cố gắng lưu review trận của Alice & Bob -> 403 Forbidden!
+    r_carol_save = client.post(
+        f"/api/matches/{match_id}/save-review",
+        json=payload,
+        headers=carol["headers"],
+    )
+    assert r_carol_save.status_code == 403, r_carol_save.text
+    assert "chỉ kỳ thủ" in r_carol_save.text.lower() or "quyền" in r_carol_save.text.lower()
+
+    # Alice (kỳ thủ trong trận) lưu review -> 200 OK!
+    r_alice_save = client.post(
+        f"/api/matches/{match_id}/save-review",
+        json=payload,
+        headers=alice["headers"],
+    )
+    assert r_alice_save.status_code == 200, r_alice_save.text
+    assert r_alice_save.json()["white_accuracy"] == 99.9

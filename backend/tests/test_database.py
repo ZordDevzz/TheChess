@@ -223,6 +223,49 @@ def test_match_lifecycle_moves_takeback_and_elo_update(db: DatabaseManager) -> N
     assert bob_after.current_streak == -1
 
 
+def test_referee_auto_settles_claim_draw_threefold(db: DatabaseManager) -> None:
+    """Regression (trận Maia 1800 vs 1900 kẹt vô hạn trong giải AI): lặp thế
+    3 lần phải được trọng tài server-side tự chấm hòa ngay trong append_move.
+    FEN rời (`current_fen`) không có move-stack nên không thấy được lặp thế —
+    trọng tài phải dựng lại bàn cờ từ mainline và dùng claim_draw=True."""
+    w = db.get_user_by_username("bot_maia_1800")
+    b = db.get_user_by_username("bot_maia_1900")
+    assert w is not None and b is not None
+
+    match = db.create_match(
+        CreateMatchRequest(
+            mode="vs_ai",
+            status="playing",
+            is_rated=False,
+            white_user_id=w.id,
+            black_user_id=b.id,
+            time_control_type="untimed",
+        )
+    )
+    assert db.settle_match_if_over(match.id) is None  # ván chưa kết thúc
+
+    # 1.Nf3 Nf6 2.Ng1 Ng8 3.Nf3 Nf6 4.Ng1 -> python-chess nhận lặp 3 lần
+    # (kể cả transposition) ngay tại đây và trọng tài chấm hòa.
+    shuffle = ["g1f3", "g8f6", "f3g1", "f6g8", "g1f3", "g8f6", "f3g1"]
+    for i, uci in enumerate(shuffle):
+        mover = w if i % 2 == 0 else b
+        db.append_move(
+            match.id, AppendMoveRequest(player_user_id=mover.id, uci=uci)
+        )
+
+    finished = db.get_match_record(match.id)
+    assert finished is not None
+    assert finished.status == "finished"
+    assert finished.result == "1/2-1/2"
+    assert finished.termination == "Lặp lại thế cờ 3 lần"
+
+    # Ván đã kết thúc -> hai "AI" không thể đấm tiếp (append bị từ chối)
+    with pytest.raises(ValueError):
+        db.append_move(
+            match.id, AppendMoveRequest(player_user_id=w.id, uci="e2e4")
+        )
+
+
 def test_save_match_review_updates_match_details_and_user_accuracy(
     db: DatabaseManager,
 ) -> None:
@@ -366,4 +409,63 @@ def test_quick_login_token_waiting_room_join_and_exhibition_stream(
     # Khi không còn trận nào đang playing: Sảnh đọc được trạng thái "không có
     # trận bot-vs-bot nào" (việc tạo + chạy trận thuộc về LabManager — xem test_lab.py).
     assert db.find_live_bot_match() is None
+
+
+def test_list_match_summaries_stable_ordering_on_move(db: DatabaseManager) -> None:
+    admin = db.get_user_by_username("admin")
+    assert admin is not None
+    alice = db.create_user_by_admin(
+        admin.id,
+        CreateUserByAdminRequest(
+            username="alice_stable", password="password_123", display_name="Alice S"
+        ),
+    )
+    bob = db.create_user_by_admin(
+        admin.id,
+        CreateUserByAdminRequest(
+            username="bob_stable", password="password_123", display_name="Bob S"
+        ),
+    )
+
+    # Tạo 2 trận đang đấu (playing): match1 tạo trước, match2 tạo sau
+    m1 = db.create_match(
+        CreateMatchRequest(
+            mode="online",
+            status="playing",
+            is_rated=False,
+            white_user_id=alice.id,
+            black_user_id=bob.id,
+        )
+    )
+    m2 = db.create_match(
+        CreateMatchRequest(
+            mode="online",
+            status="playing",
+            is_rated=False,
+            white_user_id=alice.id,
+            black_user_id=bob.id,
+        )
+    )
+
+    summaries_initial = db.list_match_summaries(statuses=["playing"])
+    ids_initial = [s.match.id for s in summaries_initial]
+    assert len(ids_initial) == 2
+    # m2 mới hơn m1 nên m2 đứng đầu
+    assert ids_initial == [m2.id, m1.id]
+
+    # m1 thực hiện 1 nước đi -> last_move_at của m1 được cập nhật mới nhất
+    db.append_move(
+        m1.id,
+        AppendMoveRequest(
+            player_user_id=alice.id,
+            uci="e2e4",
+            time_spent_ms=1000,
+        ),
+    )
+
+    # Kiểm tra: thứ tự danh sách KHÔNG bị đảo lộn vì nước đi mới
+    summaries_after = db.list_match_summaries(statuses=["playing"])
+    ids_after = [s.match.id for s in summaries_after]
+    assert ids_after == ids_initial
+
 

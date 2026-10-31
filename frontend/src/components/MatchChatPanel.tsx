@@ -15,7 +15,7 @@ interface MatchChatPanelProps {
   canModerate?: boolean;
 }
 
-export const MatchChatPanel: React.FC<MatchChatPanelProps> = ({
+export const MatchChatPanel: React.FC<MatchChatPanelProps> = React.memo(({
   match,
   currentUser,
   getName,
@@ -62,4 +62,4 @@ export const MatchChatPanel: React.FC<MatchChatPanelProps> = ({
       )}
     </div>
   );
-};
+});

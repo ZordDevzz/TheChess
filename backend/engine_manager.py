@@ -20,11 +20,27 @@ from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple
 
 import chess
 import chess.engine
+import chess.polyglot
 
 from analyzer import classify_move, extract_score_white
 
 ENGINES_DIR = Path(__file__).resolve().parent.parent / "engines"
 WEIGHTS_DIR = ENGINES_DIR / "weights"
+BOOK_PATH = ENGINES_DIR / "books" / "human_book.bin"
+
+
+def get_maia_temperature(elo: int) -> float:
+    """Nhiệt độ (Temperature) phân tầng theo Elo:
+    - Elo 1100 - 1300: 1.0 (ngẫu nhiên, đa dạng hơn)
+    - Elo 1400 - 1600: 0.8 (cân bằng)
+    - Elo 1700 - 1900: 0.5 (sắc bén, kỷ luật hơn)
+    """
+    if elo <= 1300:
+        return 1.0
+    elif elo <= 1600:
+        return 0.8
+    else:
+        return 0.5
 
 # Số instance Stockfish tối đa trong pool (cấu hình qua biến môi trường)
 MAX_POOL_SIZE = max(1, int(os.environ.get("THECHESS_ENGINE_POOL", "3")))
@@ -159,7 +175,10 @@ class EngineManager:
         if not lc0_bin or not weight_path.exists():
             return None
 
-        transport, engine = await chess.engine.popen_uci([lc0_bin, f"--weights={weight_path}"])
+        temp = get_maia_temperature(elo)
+        transport, engine = await chess.engine.popen_uci(
+            [lc0_bin, f"--weights={weight_path}", f"--temperature={temp}"]
+        )
         slot = _EngineSlot(transport, engine)
         self._lc0_cache[elo] = slot
         return engine
@@ -360,10 +379,32 @@ class EngineManager:
         elo: int = 1500,
         skill_level: Optional[int] = None,
         move_time: float = 0.6,
+        use_book: bool = True,
+        max_book_ply: int = 16,
     ) -> Dict[str, Any]:
         board = chess.Board(fen)
-        if board.is_game_over():
+        if board.is_game_over(claim_draw=True):
             raise ValueError("Ván cờ đã kết thúc, AI không thể đi tiếp.")
+
+        # Bước 0: Tra cứu Opening Book người thật cho các nước đầu (mặc định tối đa 8 nước đi)
+        if use_book and board.ply() < max_book_ply and BOOK_PATH.exists():
+            try:
+                with chess.polyglot.open_reader(BOOK_PATH) as reader:
+                    entry = reader.weighted_choice(board)
+                    chosen_move = entry.move
+                    if chosen_move in board.legal_moves:
+                        san = board.san(chosen_move)
+                        board.push(chosen_move)
+                        return {
+                            "move_uci": chosen_move.uci(),
+                            "move_san": san,
+                            "from_square": chess.square_name(chosen_move.from_square),
+                            "to_square": chess.square_name(chosen_move.to_square),
+                            "fen_after": board.fen(),
+                            "engine_used": "Human Opening Book",
+                        }
+            except (IndexError, IOError, KeyError, ValueError):
+                pass
 
         nearest_maia_elo = min(
             [1100, 1200, 1300, 1400, 1500, 1600, 1700, 1800, 1900],
@@ -439,22 +480,22 @@ class EngineManager:
                 "engine_used": f"Maia {nearest_maia_elo} (Human-like Profile)",
             }
 
-        # Trường hợp 3: Stockfish (Giới hạn Elo 1320 - 3190 hoặc Full Strength)
+        # Trường hợp 3: Stockfish (Giới hạn Elo 1320 - 2799 hoặc Master / Full Strength)
         async with self.lease() as engine:
             opts: Dict[str, Any] = {}
             if skill_level is not None:
                 opts["UCI_LimitStrength"] = False
                 opts["Skill Level"] = max(0, min(20, skill_level))
                 engine_label = f"Stockfish (Skill {opts['Skill Level']})"
-            elif elo < 3190:
-                clamped_elo = max(1320, min(3190, elo))
+            elif elo < 2800:
+                clamped_elo = max(1320, min(2799, elo))
                 opts["UCI_LimitStrength"] = True
                 opts["UCI_Elo"] = clamped_elo
                 opts["Skill Level"] = 20
                 engine_label = f"Stockfish ({clamped_elo} Elo)"
             else:
                 opts.update(_FULL_STRENGTH_OPTS)
-                engine_label = "Stockfish (Maximum Strength)"
+                engine_label = "Stockfish Master (Maximum Strength)"
 
             res = await engine.play(
                 board,

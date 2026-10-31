@@ -173,6 +173,10 @@ export function useMatchSync({
                 classification: bm.classification ?? existing.classification,
                 symbol: bm.symbol ?? existing.symbol,
                 color: bm.color ?? existing.color,
+                bestMoveUci: bm.bestMoveUci ?? existing.bestMoveUci,
+                bestMoveSan: bm.bestMoveSan ?? existing.bestMoveSan,
+                accuracy: bm.accuracy ?? existing.accuracy,
+                winLoss: bm.winLoss ?? existing.winLoss,
               };
             })
           );

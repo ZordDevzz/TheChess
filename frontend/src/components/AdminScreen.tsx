@@ -1,8 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import {
   Ban,
-  Check,
-  Copy,
   Edit3,
   Link2,
   RefreshCw,
@@ -16,24 +14,17 @@ import {
 import {
   adminAbortMatchApi,
   adminCreateUserApi,
-  adminGenerateQuickLinkApi,
   adminRevokeUserApi,
   adminUpdateUserApi,
   fetchAdminOverviewApi,
 } from '../api';
 import { MatchSummaryItem, SystemStats, UserRecord } from '../types';
+import { QuickLinkModal } from './QuickLinkModal';
 
 interface AdminScreenProps {
   currentUser: UserRecord;
   onOpenMatch: (matchId: string) => void;
   onNotify: (msg: string, kind?: 'info' | 'error' | 'success') => void;
-}
-
-interface ProvisionedCredentials {
-  username: string;
-  displayName: string;
-  initialPassword?: string;
-  quickLoginUrl: string;
 }
 
 export const AdminScreen: React.FC<AdminScreenProps> = ({
@@ -63,11 +54,13 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
   const [mustChangePass, setMustChangePass] = useState(true);
   const [creatingUser, setCreatingUser] = useState(false);
 
-  // Thẻ Quick-Link vừa tạo & Địa chỉ IP LAN thực
+  // Địa chỉ IP LAN thực & Target mở modal Quick-Link
   const [lanIp, setLanIp] = useState<string>('');
-  const [provisioned, setProvisioned] =
-    useState<ProvisionedCredentials | null>(null);
-  const [copiedField, setCopiedField] = useState<string | null>(null);
+  const [quickLinkTarget, setQuickLinkTarget] = useState<{
+    user: UserRecord;
+    initialPassword?: string;
+    initialQuickToken?: string;
+  } | null>(null);
 
   // Modal sửa thông tin / Reset mật khẩu User
   const [editingUser, setEditingUser] = useState<UserRecord | null>(null);
@@ -102,34 +95,6 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const buildQuickLinkUrl = (
-    token: string,
-    detectedLanIp?: string
-  ): string => {
-    const protocol = window.location.protocol || 'http:';
-    const port = window.location.port ? `:${window.location.port}` : '';
-    const currentHost = window.location.hostname;
-    const isLocalLoopback =
-      currentHost === 'localhost' ||
-      currentHost === '127.0.0.1' ||
-      currentHost === '0.0.0.0';
-    const resolvedHost = isLocalLoopback
-      ? detectedLanIp || lanIp || currentHost
-      : currentHost;
-    return `${protocol}//${resolvedHost}${port}/?q=${encodeURIComponent(token)}`;
-  };
-
-  const copyText = async (text: string, label: string) => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopiedField(label);
-      onNotify(`Đã sao chép ${label} vào clipboard.`, 'success');
-      window.setTimeout(() => setCopiedField(null), 2500);
-    } catch {
-      onNotify('Không sao chép tự động được, vui lòng bôi đen để copy.', 'info');
-    }
-  };
-
   const handleCreateUser = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newUsername.trim() || newPassword.length < 6) {
@@ -152,19 +117,18 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
       if (res.lan_ip && !lanIp) {
         setLanIp(res.lan_ip);
       }
-      const quickUrl = buildQuickLinkUrl(res.quick_login_token, res.lan_ip);
-      setProvisioned({
-        username: res.user.username,
-        displayName: res.user.display_name,
-        initialPassword: res.initial_password,
-        quickLoginUrl: quickUrl,
-      });
       setShowCreateModal(false);
       setNewUsername('');
       setNewDisplayName('');
       setNewPassword('');
+      // Mở modal Quick-Link riêng cho user vừa tạo kèm mật khẩu khởi tạo
+      setQuickLinkTarget({
+        user: res.user,
+        initialPassword: res.initial_password,
+        initialQuickToken: res.quick_login_token,
+      });
       onNotify(
-        `Đã cấp tài khoản @${res.user.username} kèm Quick-Link đăng nhập!`,
+        `Đã cấp tài khoản @${res.user.username} thành công!`,
         'success'
       );
       await loadOverview();
@@ -175,27 +139,6 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
       );
     } finally {
       setCreatingUser(false);
-    }
-  };
-
-  const handleGenerateQuickLink = async (u: UserRecord) => {
-    try {
-      const res = await adminGenerateQuickLinkApi(u.id);
-      if (res.lan_ip && !lanIp) {
-        setLanIp(res.lan_ip);
-      }
-      const quickUrl = buildQuickLinkUrl(res.quick_login_token, res.lan_ip);
-      setProvisioned({
-        username: u.username,
-        displayName: u.display_name,
-        quickLoginUrl: quickUrl,
-      });
-      await copyText(quickUrl, `Quick-Link của @${u.username}`);
-    } catch (err) {
-      onNotify(
-        err instanceof Error ? err.message : 'Lỗi tạo Quick-Link.',
-        'error'
-      );
     }
   };
 
@@ -383,97 +326,6 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
           </div>
         )}
 
-        {/* Thẻ Quick-Link vừa tạo (nếu có) */}
-        {provisioned && (
-          <div className="bg-overlay border-2 border-accent rounded-xl p-4 space-y-3 shadow-xl">
-            <div className="flex items-start justify-between gap-2">
-              <div>
-                <h3 className="font-display text-sm font-semibold text-ink flex items-center gap-1.5">
-                  <Link2 className="w-4 h-4 text-accent" />
-                  Thông tin đăng nhập & Quick-Link cho {provisioned.displayName}{' '}
-                  (@{provisioned.username})
-                </h3>
-                <p className="text-[11px] text-ink-2 mt-0.5">
-                  Gửi đường dẫn Quick-Link bên dưới cho bạn bè để họ bấm vào là
-                  đăng nhập thẳng không cần gõ mật khẩu.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setProvisioned(null)}
-                className="text-xs text-ink-2 hover:text-ink cursor-pointer"
-              >
-                Đóng
-              </button>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-xs font-mono bg-inset p-3 rounded-lg border border-line">
-              <div>
-                <span className="text-ink-3 block text-[10px]">Username:</span>
-                <span className="text-ink font-semibold">
-                  {provisioned.username}
-                </span>
-              </div>
-              {provisioned.initialPassword && (
-                <div>
-                  <span className="text-ink-3 block text-[10px]">
-                    Mật khẩu khởi tạo:
-                  </span>
-                  <span className="text-ink font-semibold">
-                    {provisioned.initialPassword}
-                  </span>
-                </div>
-              )}
-              <div className="md:col-span-3 pt-1 border-t border-line">
-                <span className="text-ink-3 block text-[10px] mb-0.5">
-                  Quick-Link đăng nhập 1 chạm:
-                </span>
-                <div className="text-[11px] text-accent break-all">
-                  {provisioned.quickLoginUrl}
-                </div>
-              </div>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={() =>
-                  copyText(provisioned.quickLoginUrl, 'Quick-Link đăng nhập')
-                }
-                className="px-3 py-1.5 rounded-lg bg-accent text-accent-ink text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
-              >
-                {copiedField === 'Quick-Link đăng nhập' ? (
-                  <Check className="w-3.5 h-3.5" />
-                ) : (
-                  <Link2 className="w-3.5 h-3.5" />
-                )}
-                Copy Quick-Link
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  const fullInvite = [
-                    `Mời bạn vào CLB cờ TheChess!`,
-                    `- Tài khoản: ${provisioned.username}`,
-                    provisioned.initialPassword
-                      ? `- Mật khẩu tạm: ${provisioned.initialPassword}`
-                      : null,
-                    `- Link đăng nhập nhanh 1 chạm: ${provisioned.quickLoginUrl}`,
-                  ]
-                    .filter(Boolean)
-                    .join('\n');
-                  copyText(fullInvite, 'trọn bộ lời mời');
-                }}
-                className="px-3 py-1.5 rounded-lg bg-inset border border-line hover:border-line-strong text-xs text-ink inline-flex items-center gap-1.5 cursor-pointer"
-              >
-                <Copy className="w-3.5 h-3.5" />
-                Copy trọn bộ tin nhắn mời
-              </button>
-            </div>
-          </div>
-        )}
-
         {/* Thanh chuyển Tab Quản lý User / Quản lý Phòng đang mở */}
         <div className="bg-panel border border-line rounded-xl overflow-hidden">
           <div className="px-4 py-3 border-b border-line flex flex-wrap items-center justify-between gap-3">
@@ -642,8 +494,8 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
                             {!u.is_bot && (
                               <button
                                 type="button"
-                                title="Tạo & Copy Quick-Link đăng nhập 1 chạm"
-                                onClick={() => handleGenerateQuickLink(u)}
+                                title="Cấu hình & tạo Quick-Link đăng nhập"
+                                onClick={() => setQuickLinkTarget({ user: u })}
                                 className="px-2 py-1 rounded bg-inset border border-line hover:border-accent text-[11px] text-ink inline-flex items-center gap-1 cursor-pointer"
                               >
                                 <Link2 className="w-3 h-3 text-accent" />
@@ -962,6 +814,25 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
             </form>
           </div>
         </div>
+      )}
+
+      {/* Modal Quick-Link chuyên dụng */}
+      {quickLinkTarget && (
+        <QuickLinkModal
+          user={quickLinkTarget.user}
+          initialPassword={quickLinkTarget.initialPassword}
+          initialQuickToken={quickLinkTarget.initialQuickToken}
+          lanIp={lanIp}
+          onClose={() => setQuickLinkTarget(null)}
+          onNotify={onNotify}
+          onUserUpdated={(updatedUser) => {
+            setUsers((prev) =>
+              prev.map((item) =>
+                item.id === updatedUser.id ? updatedUser : item
+              )
+            );
+          }}
+        />
       )}
     </div>
   );

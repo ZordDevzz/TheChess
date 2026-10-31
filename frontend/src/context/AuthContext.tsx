@@ -21,6 +21,7 @@ import {
   quickLoginApi,
   setAuthToken,
 } from '../api';
+import { ensureStarted } from '../hooks/useRealtime';
 import { UserRecord } from '../types';
 import { ToastKind } from '../components/Toasts';
 
@@ -35,7 +36,11 @@ interface AuthContextValue {
   /** Xóa token & user hiện tại (App tự reset trạng thái ván đấu liên quan) */
   logout: () => void;
   /** Đổi mật khẩu + tên hiển thị, tự làm mới token */
-  changePassword: (newPassword: string, displayName: string) => Promise<void>;
+  changePassword: (
+    newPassword: string,
+    displayName: string,
+    currentPassword?: string
+  ) => Promise<void>;
   /** Làm mới currentUser từ backend (ví dụ sau ván có elo mới) */
   refreshCurrentUser: () => Promise<UserRecord>;
 }
@@ -63,6 +68,7 @@ export const AuthProvider: React.FC<{
           const res = await quickLoginApi(quickToken);
           if (cancelled) return;
           setAuthToken(res.token);
+          ensureStarted();
           window.history.replaceState({}, '', window.location.pathname);
           setCurrentUser(res.user);
           setAuthChecking(false);
@@ -89,6 +95,7 @@ export const AuthProvider: React.FC<{
         try {
           const me = await fetchMeApi();
           if (!cancelled) {
+            ensureStarted();
             setCurrentUser(me);
           }
         } catch {
@@ -110,6 +117,7 @@ export const AuthProvider: React.FC<{
     setLoginError(null);
     const res = await loginApi(username, password);
     setAuthToken(res.token);
+    ensureStarted();
     setCurrentUser(res.user);
     return res.user;
   }, []);
@@ -120,8 +128,16 @@ export const AuthProvider: React.FC<{
   }, []);
 
   const changePassword = useCallback(
-    async (newPassword: string, displayName: string) => {
-      const res = await changePasswordApi(newPassword, displayName);
+    async (
+      newPassword: string,
+      displayName: string,
+      currentPassword?: string
+    ) => {
+      const res = await changePasswordApi(
+        newPassword,
+        displayName,
+        currentPassword
+      );
       setAuthToken(res.token);
       setCurrentUser(res.user);
       setShowPasswordModal(false);

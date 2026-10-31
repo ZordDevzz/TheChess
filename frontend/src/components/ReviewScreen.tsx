@@ -6,6 +6,8 @@ import {
   RefreshCw,
   Loader2,
   ArrowUpRight,
+  CheckCircle2,
+  Sparkles,
 } from 'lucide-react';
 import { analyzePosition } from '../api';
 import {
@@ -31,6 +33,8 @@ interface ReviewScreenProps {
   onRunReview: () => void;
   onUpdateReviewLines?: (lines: PVLine[] | null) => void;
   onTryAlternativeMove?: (plyBefore: number, uci: string) => void;
+  arrowMode?: 'played' | 'suggestions';
+  onChangeArrowMode?: (mode: 'played' | 'suggestions') => void;
 }
 
 const CLASS_ORDER = CLASSIFICATION_ORDER.map((key) => {
@@ -105,6 +109,8 @@ export const ReviewScreen: React.FC<ReviewScreenProps> = ({
   onRunReview,
   onUpdateReviewLines,
   onTryAlternativeMove,
+  arrowMode = 'played',
+  onChangeArrowMode,
 }) => {
   const [detail, setDetail] = useState<AnalysisResponse | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -387,6 +393,41 @@ export const ReviewScreen: React.FC<ReviewScreenProps> = ({
                 </div>
               ) : (
                 <>
+                  {/* Chuyển chế độ hiển thị mũi tên trên bàn cờ */}
+                  <div className="flex items-center justify-between gap-2 p-1.5 rounded-lg bg-inset border border-line">
+                    <span className="text-[11px] text-ink-2 font-medium pl-1">
+                      Mũi tên bàn cờ:
+                    </span>
+                    <div className="inline-flex bg-panel p-0.5 rounded-md border border-line text-xs font-medium">
+                      <button
+                        type="button"
+                        onClick={() => onChangeArrowMode?.('played')}
+                        className={`px-2.5 py-1 rounded transition cursor-pointer flex items-center gap-1.5 ${
+                          arrowMode === 'played'
+                            ? 'bg-accent text-accent-ink font-semibold shadow-xs'
+                            : 'text-ink-2 hover:text-ink'
+                        }`}
+                        title="Hiển thị thế cờ và mũi tên của nước đi vừa diễn ra"
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        Nước vừa diễn ra
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onChangeArrowMode?.('suggestions')}
+                        className={`px-2.5 py-1 rounded transition cursor-pointer flex items-center gap-1.5 ${
+                          arrowMode === 'suggestions'
+                            ? 'bg-accent text-accent-ink font-semibold shadow-xs'
+                            : 'text-ink-2 hover:text-ink'
+                        }`}
+                        title="Hiển thị thế cờ trước nước đi kèm các mũi tên gợi ý của engine"
+                      >
+                        <Sparkles className="w-3.5 h-3.5" />
+                        Các nước gợi ý
+                      </button>
+                    </div>
+                  </div>
+
                   {/* Khối: nước đang chọn */}
                   <div className="bg-inset rounded-lg border border-line p-3 space-y-2.5">
                     <div className="flex items-center justify-between gap-2">
@@ -512,111 +553,139 @@ export const ReviewScreen: React.FC<ReviewScreenProps> = ({
                         Đang phân tích thế cờ...
                       </div>
                     ) : detail && detail.lines.length > 0 ? (
-                      <>
-                        <div className="grid grid-cols-[auto_1fr_auto_auto] gap-x-2 gap-y-1 items-center text-[10px] uppercase tracking-wide text-ink-2 px-0.5 pb-1 border-b border-line">
-                          <span />
-                          <span>Nước</span>
-                          <span className="text-right">Điểm</span>
-                          <span className="text-right w-[4.5rem]">
-                            Gain
-                          </span>
-                        </div>
+                      <div className="space-y-2">
                         {detail.lines.map((line, i) => {
                           const isPlayed = line.move_uci === selectedMove.uci;
-                          const gain =
+                          const playedWin =
                             playedMoverWin !== null
-                              ? moverWin(line.win_percent_white) -
-                                playedMoverWin
+                              ? playedMoverWin
+                              : selectedMove.winPercentWhite !== undefined
+                              ? moverWin(selectedMove.winPercentWhite)
+                              : detail.lines.find(
+                                  (l) => l.move_uci === selectedMove.uci
+                                )
+                              ? moverWin(
+                                  detail.lines.find(
+                                    (l) => l.move_uci === selectedMove.uci
+                                  )!.win_percent_white
+                                )
+                              : null;
+                          const gain =
+                            playedWin !== null
+                              ? moverWin(line.win_percent_white) - playedWin
                               : null;
                           return (
                             <div
                               key={line.rank}
-                              className={`group grid grid-cols-[auto_1fr_auto_auto] gap-x-2 items-center rounded px-1.5 py-1.5 border ${
+                              className={`rounded-lg border p-2.5 space-y-1.5 transition ${
                                 isPlayed
-                                  ? 'bg-inset/80 border-line-strong'
-                                  : 'bg-inset border-line'
+                                  ? 'bg-card border-sky-400/40 ring-1 ring-sky-400/20'
+                                  : 'bg-card border-line hover:border-line-strong'
                               }`}
-                              title={line.pv_san.slice(0, 8).join(' ')}
                             >
-                              <span
-                                className="w-2 h-2 rounded-full shrink-0"
-                                style={{
-                                  backgroundColor:
-                                    PV_RANK_COLORS[i] ?? PV_RANK_COLORS[0],
-                                }}
-                              />
-                              <span className="text-xs font-mono text-ink-2 truncate flex items-center gap-1">
-                                <span
-                                  className={`font-semibold mr-1 ${
-                                    isPlayed ? 'text-sky-300' : 'text-ink'
-                                  }`}
-                                >
-                                  {line.move_san}
-                                </span>
-                                <span className="text-ink-2 truncate">
-                                  {line.pv_san.slice(1, 5).join(' ')}
-                                </span>
-                                {isPlayed ? (
-                                  <span className="ml-1 text-[10px] text-sky-300/90 not-italic font-sans shrink-0">
-                                    (đã đi)
+                              {/* Hàng 1: Nước đi + Điểm + Gain + Nút thử */}
+                              <div className="flex items-center justify-between gap-2">
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <span
+                                    className="w-2.5 h-2.5 rounded-full shrink-0"
+                                    style={{
+                                      backgroundColor:
+                                        PV_RANK_COLORS[i] ?? PV_RANK_COLORS[0],
+                                    }}
+                                    title={`Gợi ý #${i + 1}`}
+                                  />
+                                  <span className="font-mono font-bold text-sm text-ink flex items-center gap-1.5">
+                                    <span
+                                      className={
+                                        isPlayed ? 'text-sky-300' : 'text-accent'
+                                      }
+                                    >
+                                      {line.move_san}
+                                    </span>
+                                    {isPlayed && (
+                                      <span className="px-1.5 py-0.2 rounded bg-sky-500/15 border border-sky-400/30 text-[10px] font-sans font-medium text-sky-300">
+                                        Đã đi
+                                      </span>
+                                    )}
                                   </span>
-                                ) : (
-                                  onTryAlternativeMove && (
+                                </div>
+
+                                <div className="flex items-center gap-1.5 shrink-0">
+                                  {/* Điểm eval */}
+                                  <span
+                                    className="font-mono text-xs text-ink-2 bg-inset px-1.5 py-0.5 rounded border border-line tabular-nums"
+                                    title="Điểm thế cờ"
+                                  >
+                                    {formatScore(line)}
+                                  </span>
+
+                                  {/* Gain / Loss */}
+                                  {gain !== null && (
+                                    <span
+                                      className={`font-mono text-xs font-semibold px-1.5 py-0.5 rounded border tabular-nums ${
+                                        isPlayed
+                                          ? 'bg-inset text-ink-2 border-line'
+                                          : gain >= 0.5
+                                          ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40'
+                                          : gain <= -0.5
+                                          ? 'bg-rose-500/15 text-rose-300 border-rose-500/40'
+                                          : 'bg-inset text-ink-2 border-line'
+                                      }`}
+                                      title={`${
+                                        gain >= 0 ? 'Tốt hơn' : 'Kém hơn'
+                                      } ${Math.abs(gain).toFixed(1)}% cơ hội thắng so với nước đã đi`}
+                                    >
+                                      {isPlayed
+                                        ? 'Chuẩn'
+                                        : `${gain >= 0 ? '+' : '−'}${Math.abs(
+                                            gain
+                                          ).toFixed(1)}%`}
+                                    </span>
+                                  )}
+
+                                  {/* Nút Thử nhánh này nếu chưa đi */}
+                                  {!isPlayed && onTryAlternativeMove && (
                                     <button
+                                      type="button"
                                       onClick={() =>
                                         onTryAlternativeMove(
                                           selectedMove.ply - 1,
                                           line.move_uci
                                         )
                                       }
-                                      className="opacity-0 group-hover:opacity-100 ml-auto px-1.5 py-0.5 rounded bg-card hover:bg-overlay text-ink text-[10px] font-sans inline-flex items-center gap-0.5 shrink-0 transition cursor-pointer"
+                                      className="px-2 py-0.5 rounded bg-accent/15 hover:bg-accent text-accent hover:text-accent-ink border border-accent/40 text-[11px] font-medium inline-flex items-center gap-1 transition cursor-pointer"
                                       title="Thử đi nhánh thay thế này trên bàn cờ"
                                     >
                                       <span>Thử</span>
-                                      <ArrowUpRight className="w-2.5 h-2.5" />
+                                      <ArrowUpRight className="w-3 h-3" />
                                     </button>
-                                  )
-                                )}
-                              </span>
-                              <span className="font-mono text-[11px] text-ink-2 shrink-0 tabular-nums text-right">
-                                {formatScore(line)}
-                              </span>
-                              <span className="text-right w-[4.5rem] shrink-0">
-                                {gain === null ? (
-                                  <span className="text-ink-2 text-[11px] font-mono">
-                                    —
+                                  )}
+                                </div>
+                              </div>
+
+                              {/* Hàng 2: Chuỗi nước biến thể tiếp nối (PV Line) - Rộng rãi, không bị cắt cụt */}
+                              {line.pv_san && line.pv_san.length > 1 && (
+                                <div className="text-[11px] font-mono text-ink-3 bg-inset/60 px-2 py-1 rounded border border-line/60 break-words leading-relaxed">
+                                  <span className="text-ink-2 font-semibold mr-1 select-none">
+                                    Biến thể:
                                   </span>
-                                ) : isPlayed ? (
-                                  <span className="text-[11px] font-mono text-ink-2">
-                                    chuẩn
+                                  <span className="text-ink-2">
+                                    {line.pv_san.slice(1, 8).join(' ')}
                                   </span>
-                                ) : (
-                                  <span
-                                    className={`text-[11px] font-mono font-semibold tabular-nums ${
-                                      gain >= 0.5
-                                        ? 'text-emerald-400'
-                                        : gain <= -0.5
-                                        ? 'text-rose-400'
-                                        : 'text-ink-2'
-                                    }`}
-                                    title={`${
-                                      gain >= 0 ? 'Hơn' : 'Kém'
-                                    } ${Math.abs(gain).toFixed(1)}% cơ hội thắng so với nước đã đi`}
-                                  >
-                                    {gain >= 0 ? '+' : '−'}
-                                    {Math.abs(gain).toFixed(1)}%
-                                  </span>
-                                )}
-                              </span>
+                                  {line.pv_san.length > 8 && (
+                                    <span className="text-ink-3 ml-1">…</span>
+                                  )}
+                                </div>
+                              )}
                             </div>
                           );
                         })}
-                        <div className="text-[10px] text-ink-2 text-right font-mono">
+                        <div className="text-[10px] text-ink-2 text-right font-mono pt-1">
                           depth ~{detail.lines[0]?.depth ?? '—'} · gain tính
                           theo % cơ hội thắng của{' '}
                           {selectedMove.turn === 'w' ? 'Trắng' : 'Đen'}
                         </div>
-                      </>
+                      </div>
                     ) : (
                       <div className="text-[11px] text-ink-2 text-center py-1">
                         {detail

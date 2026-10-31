@@ -139,7 +139,11 @@ interface ChangePasswordModalProps {
   open: boolean;
   mandatory?: boolean;
   currentDisplayName: string;
-  onSubmit: (newPassword: string, displayName: string) => Promise<void>;
+  onSubmit: (
+    newPassword: string,
+    displayName: string,
+    currentPassword?: string
+  ) => Promise<void>;
   onClose?: () => void;
 }
 
@@ -151,6 +155,7 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
   onClose,
 }) => {
   const [displayName, setDisplayName] = useState(currentDisplayName);
+  const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -161,6 +166,10 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    if (!mandatory && !currentPassword) {
+      setError('Vui lòng nhập mật khẩu hiện tại.');
+      return;
+    }
     if (newPassword.length < 6) {
       setError('Mật khẩu mới phải có ít nhất 6 ký tự.');
       return;
@@ -173,8 +182,10 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
     try {
       await onSubmit(
         newPassword,
-        displayName.trim() || currentDisplayName
+        displayName.trim() || currentDisplayName,
+        currentPassword || undefined
       );
+      setCurrentPassword('');
       setNewPassword('');
       setConfirmPassword('');
     } catch (err) {
@@ -241,6 +252,21 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
               className="w-full bg-inset border border-line rounded-md px-3 py-1.5 text-xs text-ink focus:outline-none focus:border-accent"
             />
           </div>
+
+          {!mandatory && (
+            <div>
+              <label className="block text-[11px] text-ink-2 mb-1">
+                Mật khẩu hiện tại
+              </label>
+              <input
+                type="password"
+                value={currentPassword}
+                onChange={(e) => setCurrentPassword(e.target.value)}
+                placeholder="Nhập mật khẩu hiện tại..."
+                className="w-full bg-inset border border-line rounded-md px-3 py-1.5 text-xs text-ink focus:outline-none focus:border-accent"
+              />
+            </div>
+          )}
 
           <div>
             <label className="block text-[11px] text-ink-2 mb-1">

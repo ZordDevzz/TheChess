@@ -83,21 +83,19 @@ export function useChessClock({
       return;
     }
     if (whiteClockMs !== null && whiteClockMs <= 0) {
-      const info: GameOverInfo = {
+      onTimeout({
         result: '0-1',
         reason: 'Trắng hết giờ',
         winner: 'b',
-      };
-      onTimeout(info);
-      finishMatchApi(activeMatch.id, '0-1', 'timeout').catch(console.error);
+      });
+      finishMatchApi(activeMatch.id, 'timeout').catch(console.error);
     } else if (blackClockMs !== null && blackClockMs <= 0) {
-      const info: GameOverInfo = {
+      onTimeout({
         result: '1-0',
         reason: 'Đen hết giờ',
         winner: 'w',
-      };
-      onTimeout(info);
-      finishMatchApi(activeMatch.id, '1-0', 'timeout').catch(console.error);
+      });
+      finishMatchApi(activeMatch.id, 'timeout').catch(console.error);
     }
   }, [
     screen,

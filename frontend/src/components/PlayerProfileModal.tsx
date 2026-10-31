@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { fetchUserProfileApi } from '../api';
 import { MatchSummaryItem, UserRecord } from '../types';
+import { formatLastSeen, getRankBadge } from '../gameUtils';
 
 interface PlayerProfileModalProps {
   userId: string | null;
@@ -127,6 +128,17 @@ export const PlayerProfileModal: React.FC<PlayerProfileModalProps> = ({
                     BẠN
                   </span>
                 )}
+                {(() => {
+                  const rank = getRankBadge(profileUser.rating);
+                  return (
+                    <span
+                      className={`px-1.5 py-0.2 rounded text-[10px] font-mono font-semibold border shrink-0 ${rank.bgClass} ${rank.colorClass} ${rank.borderClass}`}
+                      title={`${rank.label} (Elo ${profileUser.rating})`}
+                    >
+                      {rank.badge} · {rank.label}
+                    </span>
+                  );
+                })()}
                 {profileUser.role === 'admin' && (
                   <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 text-[10px] font-mono">
                     <Shield className="w-2.5 h-2.5" />
@@ -151,7 +163,7 @@ export const PlayerProfileModal: React.FC<PlayerProfileModalProps> = ({
                     ? '● Đang trong bàn đấu'
                     : isOnline
                     ? '● Đang trực tuyến tại sảnh'
-                    : '○ Ngoại tuyến'}
+                    : `○ Ngoại tuyến (${formatLastSeen(profileUser.last_seen_at)})`}
                 </span>
               </div>
             </div>

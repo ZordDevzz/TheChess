@@ -31,9 +31,18 @@ interface LabScreenProps {
 
 /** Preset thời gian cho trận Lab (untimed = chơi không đồng hồ, chỉ đếm nước). */
 const LAB_TIME_PRESETS = [
-  { id: 'untimed', label: 'Không đồng hồ', type: 'untimed' as const, initialMs: null, incMs: 0 },
-  { id: '3+2', label: '3+2 Blitz', type: 'blitz' as const, initialMs: 180_000, incMs: 2_000 },
+  { id: 'untimed', label: '∞ Không đồng hồ (Tự do)', type: 'untimed' as const, initialMs: null, incMs: 0 },
+  { id: '1+0', label: '1+0 Bullet', type: 'bullet' as const, initialMs: 60_000, incMs: 0 },
+  { id: '1+1', label: '1+1 Bullet', type: 'bullet' as const, initialMs: 60_000, incMs: 1_000 },
+  { id: '2+1', label: '2+1 Bullet', type: 'bullet' as const, initialMs: 120_000, incMs: 1_000 },
+  { id: '3+0', label: '3+0 Blitz', type: 'blitz' as const, initialMs: 180_000, incMs: 0 },
+  { id: '3+2', label: '3+2 FIDE Blitz', type: 'blitz' as const, initialMs: 180_000, incMs: 2_000 },
+  { id: '5+0', label: '5+0 Blitz', type: 'blitz' as const, initialMs: 300_000, incMs: 0 },
+  { id: '5+3', label: '5+3 Blitz', type: 'blitz' as const, initialMs: 300_000, incMs: 3_000 },
+  { id: '10+0', label: '10+0 Rapid', type: 'rapid' as const, initialMs: 600_000, incMs: 0 },
   { id: '10+5', label: '10+5 Rapid', type: 'rapid' as const, initialMs: 600_000, incMs: 5_000 },
+  { id: '15+10', label: '15+10 FIDE Rapid', type: 'rapid' as const, initialMs: 900_000, incMs: 10_000 },
+  { id: '30+0', label: '30+0 Classical', type: 'rapid' as const, initialMs: 1_800_000, incMs: 0 },
 ];
 
 const RESULT_LABEL: Record<string, string> = {
@@ -70,6 +79,7 @@ export const LabScreen: React.FC<LabScreenProps> = ({ onOpenMatch, onNotify }) =
   // Form tạo giải
   const [tournamentName, setTournamentName] = useState('');
   const [selectedBots, setSelectedBots] = useState<string[]>([]);
+  const [doubleRound, setDoubleRound] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -141,7 +151,11 @@ export const LabScreen: React.FC<LabScreenProps> = ({ onOpenMatch, onNotify }) =
     const name = tournamentName.trim() || `Giải Lab ${new Date().toLocaleDateString('vi-VN')}`;
     setBusy(true);
     try {
-      const t = await createLabTournamentApi({ name, bot_ids: selectedBots });
+      const t = await createLabTournamentApi({
+        name,
+        bot_ids: selectedBots,
+        double_round: doubleRound,
+      });
       onNotify(`Đã tạo giải "${t.name}" — các trận đấu tuần tự.`, 'success');
       setTournamentName('');
       setSelectedBots([]);
@@ -160,10 +174,11 @@ export const LabScreen: React.FC<LabScreenProps> = ({ onOpenMatch, onNotify }) =
     );
   };
 
-  const scheduleCount = useMemo(
-    () => (selectedBots.length >= 2 ? (selectedBots.length * (selectedBots.length - 1)) / 2 : 0),
-    [selectedBots]
-  );
+  const scheduleCount = useMemo(() => {
+    if (selectedBots.length < 2) return 0;
+    const single = (selectedBots.length * (selectedBots.length - 1)) / 2;
+    return doubleRound ? single * 2 : single;
+  }, [selectedBots, doubleRound]);
 
   return (
     <div className="flex-1 min-h-0 w-full overflow-y-auto">
@@ -284,8 +299,17 @@ export const LabScreen: React.FC<LabScreenProps> = ({ onOpenMatch, onNotify }) =
                 );
               })}
             </div>
+            <label className="flex items-center gap-2 text-xs text-ink-2 cursor-pointer select-none py-1">
+              <input
+                type="checkbox"
+                checked={doubleRound}
+                onChange={(e) => setDoubleRound(e.target.checked)}
+                className="rounded border-line bg-inset text-accent focus:ring-accent"
+              />
+              <span>Đấu 2 lượt (Lượt đi - Lượt về, đổi màu Trắng / Đen)</span>
+            </label>
             <p className="text-[11px] text-ink-2">
-              Đã chọn {selectedBots.length} bot · {scheduleCount} trận (mỗi cặp 1 lượt,
+              Đã chọn {selectedBots.length} bot · {scheduleCount} trận ({doubleRound ? '2 lượt đi-về' : '1 lượt Berger'},
               đấu tuần tự)
             </p>
             <button

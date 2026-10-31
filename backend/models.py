@@ -252,9 +252,16 @@ class QuickLoginRequest(BaseModel):
     login_token: str = Field(..., min_length=10)
 
 
+class GenerateQuickLinkRequest(BaseModel):
+    must_change_password: Optional[bool] = None
+    reset_previous_links: bool = False
+    ttl_days: Optional[int] = Field(default=14, ge=1, le=365)
+
+
 class ChangePasswordRequest(BaseModel):
     new_password: str = Field(..., min_length=6, max_length=128)
     display_name: Optional[str] = Field(default=None, max_length=128)
+    current_password: Optional[str] = Field(default=None, max_length=128)
 
 
 class AuthResponse(BaseModel):
@@ -281,9 +288,24 @@ class TakebackMatchRequest(BaseModel):
     target_ply: int = Field(..., ge=0)
 
 
+FinishActionType = Literal["resign", "timeout", "claim_draw"]
+
+
 class FinishMatchRequest(BaseModel):
-    result: Literal["1-0", "0-1", "1/2-1/2"]
-    termination: str = Field(default="resign", max_length=32)
+    """
+    Yêu cầu kết thúc ván — client chỉ gửi HÀNH ĐỘNG, result luôn do server
+    tính từ biên bản ván đấu (trọng tài server-side, không tin result từ client).
+
+    - `resign`: bên `player_user_id` (mặc định = caller) xin thua.
+    - `timeout`: server tự xác minh đồng hồ của bên đang đi trước khi chấm.
+    - `claim_draw`: server chỉ chấm nếu thế cờ có hòa hợp lệ (3 lần lặp / 50 nước).
+    - `result` (chỉ Admin): chấm cưỡng bức kết quả tùy ý (quyết định quản trị).
+    """
+
+    action: FinishActionType = "resign"
+    player_user_id: Optional[str] = Field(default=None, max_length=64)
+    result: Optional[Literal["1-0", "0-1", "1/2-1/2"]] = None
+    termination: Optional[str] = Field(default=None, max_length=64)
 
 
 class SaveMatchReviewRequest(BaseModel):
@@ -310,8 +332,9 @@ class LabCreateMatchRequest(BaseModel):
 
 
 class LabCreateTournamentRequest(BaseModel):
-    """Tạo giải round-robin giữa >= 2 bot (mỗi cặp đấu 1 lượt)."""
+    """Tạo giải round-robin giữa >= 2 bot (1 lượt hoặc 2 lượt lượt đi - về)."""
     name: str = Field(..., min_length=1, max_length=64)
     # Roster hiện có 10 bot (Maia 1100-1900 + Stockfish) — để dư room mở rộng.
     bot_ids: List[str] = Field(..., min_length=2, max_length=12)
+    double_round: bool = Field(default=False, description="Đấu 2 lượt đi-về đổi màu cờ")
 

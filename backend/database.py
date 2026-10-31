@@ -142,7 +142,7 @@ CREATE TABLE IF NOT EXISTS "user" (
 
 CREATE TABLE IF NOT EXISTS "match" (
     id TEXT PRIMARY KEY,
-    room_code TEXT UNIQUE,
+    room_code TEXT UNIQUE COLLATE NOCASE,
     mode TEXT NOT NULL DEFAULT 'vs_ai' CHECK (mode IN ('training', 'vs_ai', 'online')),
     status TEXT NOT NULL DEFAULT 'waiting' CHECK (status IN ('waiting', 'setup', 'playing', 'finished', 'aborted')),
     is_rated INTEGER NOT NULL DEFAULT 1 CHECK (is_rated IN (0, 1)),
@@ -542,6 +542,9 @@ class DatabaseManager:
             conn.execute(
                 'ALTER TABLE "user" ADD COLUMN quick_link_epoch INTEGER NOT NULL DEFAULT 1'
             )
+        conn.execute(
+            'CREATE INDEX IF NOT EXISTS ix_match_room_code_nocase ON "match"(room_code COLLATE NOCASE)'
+        )
 
     def seed_defaults(self) -> None:
         """
@@ -616,7 +619,7 @@ class DatabaseManager:
                         ),
                     )
 
-            # Seed Bot Stockfish đại diện chung
+            # Seed Bot Stockfish đại diện chung (Master Boss)
             sf_uname = "bot_stockfish"
             sf_exists = conn.execute(
                 'SELECT id FROM "user" WHERE username = ?', (sf_uname,)
@@ -629,9 +632,14 @@ class DatabaseManager:
                         is_active, must_change_password, token_version,
                         is_bot, bot_engine, bot_default_elo,
                         rating, peak_rating, rating_deviation, created_at, updated_at
-                    ) VALUES (?, ?, 'Stockfish AI', NULL, 'player', 1, 0, 1, 1, 'stockfish', 2000, 2000, 3190, 40.0, ?, ?)
+                    ) VALUES (?, ?, 'Stockfish AI', NULL, 'player', 1, 0, 1, 1, 'stockfish', 2850, 2850, 3190, 40.0, ?, ?)
                     """,
                     (str(uuid.uuid4()), sf_uname, now, now),
+                )
+            else:
+                conn.execute(
+                    'UPDATE "user" SET bot_default_elo = 2850, rating = 2850 WHERE username = ?',
+                    (sf_uname,),
                 )
 
     # ------------------------------------------------------------------
@@ -892,6 +900,57 @@ class DatabaseManager:
             if not row:
                 raise KeyError(f"Không tìm thấy user id={target_user_id}")
             return self._row_to_user(row)
+
+    def generate_quick_link(
+        self,
+        admin_user_id: str,
+        target_user_id: str,
+        must_change_password: Optional[bool] = None,
+        reset_previous_links: bool = False,
+        ttl_days: int = 14,
+    ) -> tuple[UserRecord, str]:
+        """Tạo Quick-Link đăng nhập cho thành viên kèm các cấu hình quản trị (ép đổi mật khẩu, thời hạn, reset link cũ)."""
+        now = utc_now_iso()
+        with self.connection() as conn:
+            admin_row = conn.execute(
+                'SELECT role, is_active FROM "user" WHERE id = ?', (admin_user_id,)
+            ).fetchone()
+            if not admin_row or admin_row["role"] != "admin" or not admin_row["is_active"]:
+                raise PermissionError("Chỉ Admin mới có quyền tạo Quick-Link.")
+
+            row = conn.execute(
+                'SELECT * FROM "user" WHERE id = ?', (target_user_id,)
+            ).fetchone()
+            if not row or row["is_bot"]:
+                raise KeyError(f"Không tìm thấy tài khoản người dùng hợp lệ id={target_user_id}")
+
+            bump_epoch = 1 if reset_previous_links else 0
+            new_must_change = (
+                (1 if must_change_password else 0)
+                if must_change_password is not None
+                else row["must_change_password"]
+            )
+
+            if bump_epoch > 0 or new_must_change != row["must_change_password"]:
+                conn.execute(
+                    """
+                    UPDATE "user"
+                    SET quick_link_epoch = quick_link_epoch + ?,
+                        must_change_password = ?,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (bump_epoch, new_must_change, now, target_user_id),
+                )
+                row = conn.execute(
+                    'SELECT * FROM "user" WHERE id = ?', (target_user_id,)
+                ).fetchone()
+
+            user = self._row_to_user(row)
+
+        ttl_seconds = max(1, min(ttl_days, 365)) * 86400
+        token = create_quick_login_token(user, ttl_seconds=ttl_seconds)
+        return user, token
 
     # ------------------------------------------------------------------
     # Nghiệp vụ Bảng `match` & `match_detail`
@@ -1167,7 +1226,13 @@ class DatabaseManager:
             detail_row = conn.execute(
                 'SELECT * FROM "match_detail" WHERE id = ?', (detail_id,)
             ).fetchone()
-            return self._row_to_match_detail(detail_row)
+            detail = self._row_to_match_detail(detail_row)
+
+        # Trọng tài server-side: chấm ván ngay nếu nước vừa đi khép lại ván đấu
+        # (gồm cả hòa claim: lặp 3 lần / 50 nước). Chạy SAU khi transaction
+        # trên commit để không lồng write-connection.
+        self.settle_match_if_over(match_id)
+        return detail
 
     def takeback_to_ply(self, match_id: str, target_ply: int) -> MatchRecord:
         """
@@ -1428,6 +1493,99 @@ class DatabaseManager:
             ),
         )
 
+    # ------------------------------------------------------------------
+    # Trọng tài server-side: kết thúc ván tính từ biên bản (full history)
+    # ------------------------------------------------------------------
+
+    #: Nhãn kết thúc hiển thị trực tiếp trên UI (match.termination).
+    TERMINATION_LABELS = {
+        chess.Termination.CHECKMATE: "Chiếu hết",
+        chess.Termination.STALEMATE: "Hết nước đi (stalemate)",
+        chess.Termination.INSUFFICIENT_MATERIAL: "Không đủ quân để chiếu hết",
+        chess.Termination.THREEFOLD_REPETITION: "Lặp lại thế cờ 3 lần",
+        chess.Termination.FIVEFOLD_REPETITION: "Lặp lại thế cờ 5 lần",
+        chess.Termination.FIFTY_MOVES: "Hòa theo luật 50 nước",
+        chess.Termination.SEVENTYFIVE_MOVES: "Hòa theo luật 75 nước",
+    }
+
+    def build_mainline_board(self, match_id: str) -> Optional[chess.Board]:
+        """
+        Dựng bàn cờ từ `initial_fen` + replay toàn bộ mainline của match.
+
+        Đây là nguồn sự thật duy nhất cho luật kết thúc ván: board có full
+        move-stack nên phát hiện được lặp thế cờ (3/5 lần) — điều một FEN
+        rời (`current_fen`) không thể làm được.
+        """
+        with self.read_connection() as conn:
+            match_row = conn.execute(
+                'SELECT initial_fen FROM "match" WHERE id = ?', (match_id,)
+            ).fetchone()
+            if not match_row:
+                return None
+            board = chess.Board(match_row["initial_fen"])
+            rows = conn.execute(
+                """
+                SELECT uci FROM "match_detail"
+                WHERE match_id = ? AND is_mainline = 1
+                ORDER BY ply ASC
+                """,
+                (match_id,),
+            ).fetchall()
+        for r in rows:
+            move = chess.Move.from_uci(r["uci"])
+            if move not in board.legal_moves:  # dữ liệu lệch — dừng an toàn
+                break
+            board.push(move)
+        return board
+
+    def settle_match_if_over(self, match_id: str) -> Optional[MatchRecord]:
+        """
+        Trọng tài: chấm ván nếu thế cờ hiện tại đã kết thúc.
+
+        Dùng `claim_draw=True` — lặp thế 3 lần và luật 50 nước được tự động
+        ghi nhận như hòa (đồng bộ với luật hiển thị phía UI). Trả về bản ghi
+        match đã finish, hoặc None nếu ván chưa/đã kết thúc.
+        """
+        m = self.get_match_record(match_id)
+        if m is None or m.status != "playing":
+            return None
+        board = self.build_mainline_board(match_id)
+        if board is None or not board.is_game_over(claim_draw=True):
+            return None
+        outcome = board.outcome(claim_draw=True)
+        assert outcome is not None
+        label = self.TERMINATION_LABELS.get(outcome.termination, "Hòa")
+        return self.complete_match(
+            match_id, result=outcome.result(), termination=label
+        )
+
+    def flag_timeout(self, match_id: str) -> Optional[MatchRecord]:
+        """
+        Kiểm tra & chấm hết thời gian của bên đang đi, theo đồng hồ phía server
+        (`clock_ms` chốt ở nước cuối + `last_move_at`). Trả về match đã finish
+        nếu đồng hồ đã <= 0, ngược lại None (chưa hết giờ — từ chối claim).
+        """
+        m = self.get_match_record(match_id)
+        if m is None or m.status != "playing" or m.time_control_type == "untimed":
+            return None
+        clock_ms = (
+            m.white_clock_ms if m.current_turn == "w" else m.black_clock_ms
+        ) or m.initial_time_ms
+        if clock_ms is None:
+            return None
+        anchor = m.last_move_at or m.started_at or m.created_at
+        try:
+            elapsed_ms = (
+                datetime.now(timezone.utc)
+                - datetime.fromisoformat(anchor.replace("Z", "+00:00"))
+            ).total_seconds() * 1000.0
+        except ValueError:
+            return None
+        if elapsed_ms < clock_ms:
+            return None
+        result = "0-1" if m.current_turn == "w" else "1-0"
+        return self.complete_match(match_id, result=result, termination="Hết thời gian")
+
     def save_match_review(
         self,
         match_id: str,
@@ -1624,9 +1782,10 @@ class DatabaseManager:
             except Exception:
                 return None
 
-            with self.connection() as conn:
+            matched_user_id = None
+            with self.read_connection() as conn:
                 rows = conn.execute(
-                    'SELECT * FROM "user" WHERE is_bot = 0 AND is_active = 1'
+                    'SELECT id, quick_link_epoch FROM "user" WHERE is_bot = 0 AND is_active = 1'
                 ).fetchall()
                 for row in rows:
                     row_tag = hashlib.sha256(row["id"].encode("utf-8")).digest()[:4]
@@ -1640,14 +1799,18 @@ class DatabaseManager:
                         hashlib.sha256,
                     ).digest()[:5]
                     if hmac.compare_digest(sig, expected_sig):
-                        conn.execute(
-                            'UPDATE "user" SET last_login_at = ?, last_seen_at = ?, updated_at = ? WHERE id = ?',
-                            (now, now, now, row["id"]),
-                        )
-                        updated = conn.execute(
-                            'SELECT * FROM "user" WHERE id = ?', (row["id"],)
-                        ).fetchone()
-                        return self._row_to_user(updated)
+                        matched_user_id = row["id"]
+                        break
+            if matched_user_id:
+                with self.connection() as conn:
+                    conn.execute(
+                        'UPDATE "user" SET last_login_at = ?, last_seen_at = ?, updated_at = ? WHERE id = ?',
+                        (now, now, now, matched_user_id),
+                    )
+                    updated = conn.execute(
+                        'SELECT * FROM "user" WHERE id = ?', (matched_user_id,)
+                    ).fetchone()
+                    return self._row_to_user(updated) if updated else None
             return None
 
         # Nhánh 2: Token chuẩn dạng <b64_payload>.<b64_hmac>
@@ -1690,16 +1853,25 @@ class DatabaseManager:
         user_id: str,
         new_password: str,
         display_name: Optional[str] = None,
+        current_password: Optional[str] = None,
     ) -> UserRecord:
         """Người dùng đổi mật khẩu (xóa cờ `must_change_password` và tăng `token_version`)."""
         now = utc_now_iso()
-        pw_hash = hash_password(new_password)
         with self.connection() as conn:
             row = conn.execute(
                 'SELECT * FROM "user" WHERE id = ?', (user_id,)
             ).fetchone()
             if not row or row["is_bot"]:
                 raise KeyError("Không tìm thấy tài khoản người dùng.")
+
+            # Bảo mật: Kiểm tra mật khẩu hiện tại (trừ trường hợp tài khoản bắt buộc đổi pass do Admin cấp)
+            if current_password:
+                if not verify_password(current_password, row["password_hash"]):
+                    raise ValueError("Mật khẩu hiện tại không chính xác.")
+            elif not row["must_change_password"]:
+                raise ValueError("Vui lòng nhập mật khẩu hiện tại.")
+
+            pw_hash = hash_password(new_password)
             next_display = (
                 display_name.strip()
                 if display_name and display_name.strip()
@@ -1818,11 +1990,12 @@ class DatabaseManager:
         và chuyển trạng thái ván sang `playing`.
         """
         code = room_code_or_id.strip().upper().lstrip("#")
+        raw_id = room_code_or_id.strip()
         now = utc_now_iso()
         with self.connection() as conn:
             match_row = conn.execute(
-                'SELECT * FROM "match" WHERE UPPER(room_code) = ? OR id = ?',
-                (code, room_code_or_id.strip()),
+                'SELECT * FROM "match" WHERE room_code = ? OR id = ?',
+                (code, raw_id),
             ).fetchone()
             if not match_row:
                 raise KeyError(f"Không tìm thấy phòng đấu với mã '{room_code_or_id}'.")
@@ -1911,11 +2084,17 @@ class DatabaseManager:
         user_id: Optional[str] = None,
         both_bots: bool = False,
         limit: int = 30,
+        order_by: Optional[str] = None,
     ) -> List[MatchSummaryItem]:
         """Lấy danh sách tóm tắt ván đấu kèm thông tin `white_player` và `black_player`.
 
         `both_bots=True`: chỉ lấy ván cả hai bên đều là bot (vs_ai bot-vs-bot,
         trận Lab/exhibition) — phục vụ filter lịch sử AI.
+        `order_by`: tùy chọn kiểu sắp xếp ('started_at_desc', 'created_at_desc',
+        'finished_at_desc', 'activity_desc'). Nếu None, tự động chọn thứ tự ổn định:
+        - playing/setup: theo thời điểm bắt đầu (không theo last_move_at để tránh nhảy bàn khi đi nước)
+        - waiting: theo thời điểm tạo phòng
+        - finished/aborted: theo thời điểm kết thúc ván
         """
         if not statuses:
             return []
@@ -1928,6 +2107,38 @@ class DatabaseManager:
         if both_bots:
             where_clause += " AND w.is_bot = 1 AND b.is_bot = 1"
         params.append(limit)
+
+        if order_by == "started_at_desc":
+            order_clause = "COALESCE(m.started_at, m.created_at) DESC, m.id DESC"
+        elif order_by == "created_at_desc":
+            order_clause = "m.created_at DESC, m.id DESC"
+        elif order_by == "finished_at_desc":
+            order_clause = "COALESCE(m.finished_at, m.updated_at, m.created_at) DESC, m.id DESC"
+        elif order_by == "activity_desc":
+            order_clause = "COALESCE(m.last_move_at, m.started_at, m.created_at) DESC, m.id DESC"
+        else:
+            status_set = set(statuses)
+            if status_set.issubset({"playing", "setup"}):
+                # Trận đang đấu: sắp xếp ổn định theo thời điểm bắt đầu (không sort theo last_move_at
+                # để tránh các bàn đảo lộn vị trí liên tục mỗi khi có người đi nước mới).
+                order_clause = "COALESCE(m.started_at, m.created_at) DESC, m.id DESC"
+            elif status_set.issubset({"waiting"}):
+                # Phòng chờ: phòng mới tạo trước
+                order_clause = "m.created_at DESC, m.id DESC"
+            elif status_set.issubset({"finished", "aborted"}):
+                # Trận đã kết thúc: ván hoàn tất gần nhất lên trước
+                order_clause = "COALESCE(m.finished_at, m.updated_at, m.created_at) DESC, m.id DESC"
+            else:
+                # Đa trạng thái: ưu tiên đang đấu -> chờ -> kết thúc, tie-breaker theo thời gian
+                order_clause = (
+                    "CASE m.status "
+                    "WHEN 'playing' THEN 1 "
+                    "WHEN 'setup' THEN 2 "
+                    "WHEN 'waiting' THEN 3 "
+                    "WHEN 'finished' THEN 4 "
+                    "ELSE 5 END ASC, "
+                    "COALESCE(m.finished_at, m.started_at, m.created_at) DESC, m.id DESC"
+                )
 
         # P1-2: JOIN 1 lần lấy cả 2 kỳ thủ thay vì N+1 query từng user.
         w_select = ", ".join(
@@ -1945,7 +2156,7 @@ class DatabaseManager:
                 JOIN "user" w ON w.id = m.white_user_id
                 JOIN "user" b ON b.id = m.black_user_id
                 WHERE {where_clause}
-                ORDER BY COALESCE(m.last_move_at, m.created_at) DESC
+                ORDER BY {order_clause}
                 LIMIT ?
                 """,
                 tuple(params),
@@ -2079,7 +2290,14 @@ class DatabaseManager:
     def list_lab_tournaments(self, limit: int = 20) -> List[Dict[str, Any]]:
         with self.read_connection() as conn:
             rows = conn.execute(
-                'SELECT id FROM "lab_tournament" ORDER BY created_at DESC LIMIT ?',
+                """
+                SELECT id FROM "lab_tournament"
+                ORDER BY
+                    CASE WHEN status = 'running' THEN 0 ELSE 1 END ASC,
+                    created_at DESC,
+                    id DESC
+                LIMIT ?
+                """,
                 (limit,),
             ).fetchall()
         out: List[Dict[str, Any]] = []
@@ -2112,11 +2330,10 @@ class DatabaseManager:
 
     def find_live_bot_match(self) -> Optional[MatchSummaryItem]:
         """Trận AI vs AI đang `playing` gần nhất (cho Sảnh hiển thị tiêu điểm)."""
-        active = self.list_match_summaries(statuses=["playing"], limit=20)
-        for item in active:
-            if item.is_system_exhibition:
-                return item
-        return None
+        active = self.list_match_summaries(
+            statuses=["playing"], both_bots=True, limit=1
+        )
+        return active[0] if active else None
 
     # ------------------------------------------------------------------
     # Chat theo channel topic: 'match:<id>' | 'lobby' | 'dm:<a>:<b>'

@@ -64,37 +64,73 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
-def build_round_robin(bot_ids: List[str]) -> List[Dict[str, Any]]:
+def build_round_robin(
+    bot_ids: List[str], double_round: bool = False
+) -> List[Dict[str, Any]]:
     """
-    Lịch đấu vòng tròn 1 lượt (thuật toán circle-method).
+    Lịch đấu vòng tròn chuẩn Berger Tables (chuẩn FIDE).
 
-    Với số người lẻ, mỗi vòng có 1 người được nghỉ (bye). Trả về danh sách
-    slot: {round, white_bot_id, black_bot_id, match_id, result} — xen kẽ màu
-    qua các vòng để phân công Trắng/Đen công bằng.
+    - Với số người lẻ, mỗi vòng có 1 người được nghỉ (bye).
+    - Phân bổ màu Trắng/Đen công bằng tuyệt đối: mỗi kỳ thủ có số ván Trắng/Đen
+      chênh lệch không quá 1 ván (4-5 hoặc 5-4 với 10 người), không ai bị dồn 1 màu.
+    - Nếu double_round=True: đấu 2 lượt (Lượt đi - Lượt về), đổi màu cờ 100% công bằng.
     """
     players: List[Optional[str]] = list(bot_ids)
     if len(players) % 2 == 1:
         players.append(None)
     n = len(players)
     schedule: List[Dict[str, Any]] = []
-    for r in range(n - 1):
-        for i in range(n // 2):
-            a = players[i]
-            b = players[n - 1 - i]
-            if a is None or b is None:
+
+    # FIDE Berger table: chỉ số 1..n
+    for r in range(1, n):
+        played = set()
+        for p in range(1, n):
+            if p in played:
                 continue
-            w, bl = (a, b) if (r + i) % 2 == 0 else (b, a)
-            schedule.append(
+            opp = (r - p) % (n - 1)
+            if opp == 0:
+                opp = n - 1
+            if opp == p:
+                opp = n
+            played.add(p)
+            played.add(opp)
+
+            if opp == n:
+                w_idx, b_idx = (p, opp) if r % 2 == 1 else (opp, p)
+            else:
+                if (p + opp) % 2 == 1:
+                    w_idx, b_idx = (p, opp) if p < opp else (opp, p)
+                else:
+                    w_idx, b_idx = (opp, p) if p < opp else (p, opp)
+
+            w_bot = players[w_idx - 1]
+            b_bot = players[b_idx - 1]
+            if w_bot is not None and b_bot is not None:
+                schedule.append(
+                    {
+                        "round": r,
+                        "white_bot_id": w_bot,
+                        "black_bot_id": b_bot,
+                        "match_id": None,
+                        "result": None,
+                    }
+                )
+
+    if double_round:
+        num_rounds = n - 1
+        second_leg = []
+        for s in schedule:
+            second_leg.append(
                 {
-                    "round": r + 1,
-                    "white_bot_id": w,
-                    "black_bot_id": bl,
+                    "round": s["round"] + num_rounds,
+                    "white_bot_id": s["black_bot_id"],
+                    "black_bot_id": s["white_bot_id"],
                     "match_id": None,
                     "result": None,
                 }
             )
-        # Xoay vòng: giữ vị trí 0, dịch phần còn lại sang phải 1 bước.
-        players = [players[0], players[-1]] + players[1:-1]
+        schedule.extend(second_leg)
+
     return schedule
 
 
@@ -243,7 +279,10 @@ class LabManager:
                     "elo": bot.bot_default_elo,
                 }
             )
-        schedule = build_round_robin([p["bot_id"] for p in participants])
+        schedule = build_round_robin(
+            [p["bot_id"] for p in participants],
+            double_round=getattr(req, "double_round", False),
+        )
 
         rec = self._db.create_lab_tournament(
             tid=str(uuid.uuid4()),
@@ -308,16 +347,12 @@ class LabManager:
 
     def list_matches(self, limit: int = 30) -> Dict[str, Any]:
         """Trận AI vs AI: đang live + đã kết thúc gần đây (cho màn Lab)."""
-        live = [
-            item
-            for item in self._db.list_match_summaries(statuses=["playing"], limit=limit)
-            if item.is_system_exhibition
-        ]
-        recent = [
-            item
-            for item in self._db.list_match_summaries(statuses=["finished"], limit=limit)
-            if item.is_system_exhibition
-        ]
+        live = self._db.list_match_summaries(
+            statuses=["playing"], both_bots=True, limit=limit
+        )
+        recent = self._db.list_match_summaries(
+            statuses=["finished"], both_bots=True, limit=limit
+        )
         return {
             "live": [self._summary_out(i) for i in live],
             "recent": [self._summary_out(i) for i in recent],
@@ -375,15 +410,18 @@ class LabManager:
                 if m is None or m.status != "playing":
                     return
 
-                board = chess.Board(m.current_fen)
-                if board.is_game_over():
-                    self._finish_board(match_id, board)
+                # Trọng tài server (DB, full-history + claim_draw): chấm ván nếu
+                # thế cờ đã kết thúc — bắt được cả lặp 3 lần & luật 50 nước mà
+                # FEN rơi không thấy được. Trận dở sau restart cũng được chấm tại đây.
+                if self._db.settle_match_if_over(match_id) is not None:
+                    await self._emit(match_id, "match_finished")
                     return
                 if m.total_plies >= MAX_PLIES:
                     self._db.complete_match(match_id, result="1/2-1/2", termination="ply_limit")
                     await self._emit(match_id, "match_finished")
                     return
 
+                board = chess.Board(m.current_fen)
                 mover = (
                     self._db.get_user_by_id(m.white_user_id)
                     if board.turn == chess.WHITE
@@ -400,8 +438,14 @@ class LabManager:
                         mover.bot_default_elo or 1500,
                     )
                 except ValueError:
-                    # Ván đã kết thúc ở thế cờ này (engine từ chối) — chấm & thoát.
-                    self._finish_board(match_id, board)
+                    # Engine từ chối thế cờ đã kết thúc — để trọng tài DB chấm.
+                    settled = self._db.settle_match_if_over(match_id)
+                    if settled is None:
+                        # dữ liệu lệch hiếm hoi: chấm hòa an toàn, không loop vô hạn
+                        self._db.complete_match(
+                            match_id, result="1/2-1/2", termination="Hòa"
+                        )
+                    await self._emit(match_id, "match_finished")
                     return
                 elapsed = time.monotonic() - t0
 
@@ -438,8 +482,10 @@ class LabManager:
                     ),
                 )
 
-                if board.is_game_over():
-                    self._finish_board(match_id, board)
+                # Trọng tài trong append_move có thể đã chấm ván (bao gồm hòa
+                # claim) — nếu vậy dừng ngay, không xin nước tiếp.
+                m = self._db.get_match_record(match_id)
+                if m is None or m.status != "playing":
                     await self._emit(match_id, "match_finished")
                     return
 
@@ -512,13 +558,6 @@ class LabManager:
                 self._db.update_lab_tournament(tid, status="finished")
         finally:
             self._tasks.pop(tid, None)
-
-    def _finish_board(self, match_id: str, board: chess.Board) -> None:
-        res = board.result()
-        if res not in ("1-0", "0-1", "1/2-1/2"):
-            res = "1/2-1/2"
-        termination = "checkmate" if board.is_checkmate() else "draw"
-        self._db.complete_match(match_id, result=res, termination=termination)
 
     async def _emit(self, match_id: str, event: str) -> None:
         try:

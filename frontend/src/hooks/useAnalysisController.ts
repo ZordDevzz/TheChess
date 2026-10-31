@@ -46,12 +46,16 @@ export function useAnalysisController({
     const controller = new AbortController();
     abortControllerRef.current = controller;
 
+    // Reset analysis ngay khi thế cờ thay đổi để không vẽ mũi tên thế cờ cũ lên bàn cờ mới
+    setAnalysis(null);
+    setIsAnalyzing(true);
+
     const effectiveDepth =
       isSpectator && phase === 'playing' ? Math.min(depth, 12) : depth;
 
-    setIsAnalyzing(true);
     analyzePosition(currentFen, effectiveDepth, multipv, controller.signal)
       .then((res) => {
+        if (controller.signal.aborted) return;
         setAnalysis(res);
         setIsAnalyzing(false);
         // Backfill điểm đánh giá trực tiếp vào nước đi hiện tại để biểu đồ EvalGraph cập nhật mượt

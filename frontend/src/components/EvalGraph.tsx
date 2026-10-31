@@ -16,7 +16,7 @@ interface EvalGraphProps {
 }
 
 /** Biểu đồ lợi thế + nút chạy/mở màn hình Game Review chi tiết. */
-export const EvalGraph: React.FC<EvalGraphProps> = ({
+export const EvalGraph: React.FC<EvalGraphProps> = React.memo(({
   moves,
   currentPly,
   onSelectPly,
@@ -160,4 +160,4 @@ export const EvalGraph: React.FC<EvalGraphProps> = ({
       </div>
     </div>
   );
-};
+});

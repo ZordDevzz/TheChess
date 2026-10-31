@@ -31,7 +31,7 @@ interface MoveHistoryProps {
   onSwitchSides: () => void;
 }
 
-export const MoveHistory: React.FC<MoveHistoryProps> = ({
+export const MoveHistory: React.FC<MoveHistoryProps> = React.memo(({
   moves,
   currentPly,
   phase,
@@ -45,6 +45,16 @@ export const MoveHistory: React.FC<MoveHistoryProps> = ({
   onNewGame,
   onSwitchSides,
 }) => {
+  const activeMoveRef = React.useRef<HTMLButtonElement | null>(null);
+
+  React.useEffect(() => {
+    if (activeMoveRef.current) {
+      activeMoveRef.current.scrollIntoView({
+        block: 'nearest',
+        behavior: 'smooth',
+      });
+    }
+  }, [currentPly]);
   const pairs: Array<{
     moveNumber: number;
     white?: MoveRecord;
@@ -81,8 +91,10 @@ export const MoveHistory: React.FC<MoveHistoryProps> = ({
         }`}
       >
         <span>{m.symbol}</span>
-        {m.winLoss !== undefined && m.winLoss >= 4.5 && (
-          <span className="text-[10px] opacity-90">-{m.winLoss.toFixed(0)}%</span>
+        {m.winLoss !== undefined && m.winLoss >= 0.5 && (
+          <span className="text-[10px] opacity-90">
+            -{m.winLoss >= 10 ? m.winLoss.toFixed(0) : m.winLoss.toFixed(1)}%
+          </span>
         )}
       </span>
     );
@@ -136,43 +148,59 @@ export const MoveHistory: React.FC<MoveHistoryProps> = ({
         </div>
       </div>
 
-      {/* Thẻ phân tích chi tiết nước đi đang chọn: Phân loại + Chỉ số Gain/Loss + Nước tối ưu */}
-      {currentMove && currentMeta && (
+      {/* Thẻ phân tích chi tiết nước đi đang chọn (chiều cao ổn định min-h-[46px] chống giật layout) */}
+      {currentMove && (
         <div
-          className="shrink-0 rounded-md px-3 py-2 flex items-center justify-between gap-2 text-xs border"
+          className="shrink-0 rounded-md px-3 py-1.5 flex items-center justify-between gap-2 text-xs border min-h-[46px] transition-colors"
           style={{
-            backgroundColor: currentMeta.bg,
-            borderColor: currentMeta.border,
+            backgroundColor: currentMeta ? currentMeta.bg : 'var(--c-card)',
+            borderColor: currentMeta ? currentMeta.border : 'var(--c-line)',
           }}
         >
           <div className="flex items-center gap-2 min-w-0">
-            <span
-              className="inline-flex items-center justify-center w-5 h-5 rounded-full text-xs font-bold text-accent-ink shrink-0"
-              style={{ backgroundColor: currentMeta.color }}
-            >
-              {currentMove.symbol}
-            </span>
+            {currentMeta ? (
+              <span
+                className="inline-flex items-center justify-center w-5 h-5 rounded-full text-xs font-bold text-accent-ink shrink-0"
+                style={{ backgroundColor: currentMeta.color }}
+              >
+                {currentMove.symbol}
+              </span>
+            ) : (
+              <span className="inline-flex items-center justify-center w-5 h-5 rounded-full text-xs font-bold bg-inset text-ink-3 shrink-0">
+                •
+              </span>
+            )}
             <div className="min-w-0">
               <div className="flex items-center gap-1.5">
                 <span className="font-mono font-bold text-ink">
                   {currentMove.moveNumber}
                   {currentMove.turn === 'w' ? '.' : '...'} {currentMove.san}
                 </span>
-                <span className="font-semibold" style={{ color: currentMeta.color }}>
-                  {currentMeta.viLabel}
-                </span>
-              </div>
-              <div className="flex items-center gap-2 text-[11px] text-ink-2 mt-0.5 font-mono">
-                {currentMove.winLoss !== undefined && currentMove.winLoss > 1.0 ? (
-                  <span className="flex items-center gap-0.5 text-rose-300">
-                    <TrendingDown className="w-3 h-3" />
-                    Mất {currentMove.winLoss.toFixed(1)}% cơ hội thắng
+                {currentMeta ? (
+                  <span className="font-semibold text-xs" style={{ color: currentMeta.color }}>
+                    {currentMeta.viLabel}
                   </span>
                 ) : (
-                  <span className="flex items-center gap-0.5 text-emerald-300">
-                    <CheckCircle2 className="w-3 h-3" />
-                    Giữ trọn ưu thế
+                  <span className="text-[11px] text-ink-3 font-mono">
+                    Đang đánh giá...
                   </span>
+                )}
+              </div>
+              <div className="flex items-center gap-2 text-[11px] text-ink-2 mt-0.5 font-mono">
+                {currentMove.winLoss !== undefined ? (
+                  currentMove.winLoss > 0.5 ? (
+                    <span className="flex items-center gap-0.5 text-rose-300">
+                      <TrendingDown className="w-3 h-3" />
+                      Mất {currentMove.winLoss.toFixed(1)}% cơ hội thắng
+                    </span>
+                  ) : (
+                    <span className="flex items-center gap-0.5 text-emerald-300">
+                      <CheckCircle2 className="w-3 h-3" />
+                      Giữ trọn ưu thế (0.0%)
+                    </span>
+                  )
+                ) : currentMeta ? null : (
+                  <span className="text-ink-3">Chờ phân loại nước</span>
                 )}
                 {currentMove.accuracy !== undefined && (
                   <span className="text-ink-2">· Độ chuẩn {currentMove.accuracy}%</span>
@@ -185,7 +213,7 @@ export const MoveHistory: React.FC<MoveHistoryProps> = ({
             currentMove.bestMoveUci !== currentMove.uci &&
             currentMove.classification !== 'Best' && (
               <div className="text-right shrink-0">
-                <div className="text-[11px] text-ink-2">Nước tối ưu</div>
+                <div className="text-[10px] text-ink-2">Nước tối ưu</div>
                 <div className="text-xs font-mono font-bold text-emerald-400">
                   {currentMove.bestMoveSan}
                 </div>
@@ -212,6 +240,7 @@ export const MoveHistory: React.FC<MoveHistoryProps> = ({
 
               {pair.white ? (
                 <button
+                  ref={currentPly === pair.white.ply ? activeMoveRef : undefined}
                   onClick={() => onSelectPly(pair.white!.ply)}
                   className={`col-span-3 text-left px-2 py-0.5 rounded font-mono text-xs flex items-center justify-between transition cursor-pointer ${
                     currentPly === pair.white.ply
@@ -228,6 +257,7 @@ export const MoveHistory: React.FC<MoveHistoryProps> = ({
 
               {pair.black ? (
                 <button
+                  ref={currentPly === pair.black.ply ? activeMoveRef : undefined}
                   onClick={() => onSelectPly(pair.black!.ply)}
                   className={`col-span-3 text-left px-2 py-0.5 rounded font-mono text-xs flex items-center justify-between transition cursor-pointer ${
                     currentPly === pair.black.ply
@@ -311,4 +341,4 @@ export const MoveHistory: React.FC<MoveHistoryProps> = ({
       </div>
     </div>
   );
-};
+});

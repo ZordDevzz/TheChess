@@ -103,8 +103,19 @@ def setup_maia_weights():
         download_file(url, weight_path, f"Maia {elo} neural network weight")
 
 
+def setup_opening_book():
+    book_path = ENGINES_DIR / "books" / "human_book.bin"
+    if book_path.exists() and book_path.stat().st_size > 0:
+        print(f"[+] Opening book đã sẵn sàng tại: {book_path}")
+        return
+    print("[*] Đang khởi tạo Polyglot Opening Book...")
+    from build_opening_book import build_book
+    build_book()
+
+
 if __name__ == "__main__":
     print("=== CÀI ĐẶT CHESS ENGINES & MODELS CHO THECHESS ===")
     setup_stockfish()
     setup_maia_weights()
+    setup_opening_book()
     print("=== HOÀN TẤT ===")

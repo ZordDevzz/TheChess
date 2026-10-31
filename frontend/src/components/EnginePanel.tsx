@@ -81,7 +81,7 @@ const getScoreBadgeClass = (line: PVLine) => {
   return 'bg-inset text-ink-2 border-line-strong';
 };
 
-export const EnginePanel: React.FC<EnginePanelProps> = ({
+export const EnginePanel: React.FC<EnginePanelProps> = React.memo(({
   phase,
   config,
   visibility,
@@ -229,33 +229,50 @@ export const EnginePanel: React.FC<EnginePanelProps> = ({
               </div>
             </div>
 
-            {/* Thanh tỷ lệ cơ hội thắng Trắng vs Đen + điểm số trực quan */}
-            {showEval && analysis && (
-              <div className="space-y-1">
-                <div className="flex items-center justify-between text-[11px] font-mono">
-                  <span className="text-ink-2">
-                    Trắng: <strong>{analysis.win_percent_white.toFixed(1)}%</strong>
-                  </span>
-                  {analysis.lines[0] && (
-                    <span
-                      className={`px-1.5 py-0.2 rounded border text-[10px] tabular-nums ${getScoreBadgeClass(
-                        analysis.lines[0]
-                      )}`}
-                      title="Điểm đánh giá thế cờ hiện tại"
-                    >
-                      {formatLineScore(analysis.lines[0])}
-                    </span>
-                  )}
-                  <span className="text-ink-2">
-                    Đen: <strong>{(100 - analysis.win_percent_white).toFixed(1)}%</strong>
-                  </span>
-                </div>
-                <div className="w-full h-1.5 rounded-full overflow-hidden bg-card flex">
-                  <div
-                    className="bg-accent transition-all duration-300"
-                    style={{ width: `${analysis.win_percent_white}%` }}
-                  />
-                </div>
+            {/* Thanh tỷ lệ cơ hội thắng Trắng vs Đen + điểm số trực quan (chiều cao cố định chống giật layout) */}
+            {showEval && (
+              <div className="h-7 flex flex-col justify-center">
+                {analysis ? (
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between text-[11px] font-mono leading-tight">
+                      <span className="text-ink-2">
+                        Trắng: <strong>{analysis.win_percent_white.toFixed(1)}%</strong>
+                      </span>
+                      {analysis.lines[0] && (
+                        <span
+                          className={`px-1.5 py-0.2 rounded border text-[10px] tabular-nums ${getScoreBadgeClass(
+                            analysis.lines[0]
+                          )}`}
+                          title="Điểm đánh giá thế cờ hiện tại"
+                        >
+                          {formatLineScore(analysis.lines[0])}
+                        </span>
+                      )}
+                      <span className="text-ink-2">
+                        Đen: <strong>{(100 - analysis.win_percent_white).toFixed(1)}%</strong>
+                      </span>
+                    </div>
+                    <div className="w-full h-1.5 rounded-full overflow-hidden bg-card flex">
+                      <div
+                        className="bg-accent transition-all duration-300"
+                        style={{ width: `${analysis.win_percent_white}%` }}
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-1 opacity-40 animate-pulse">
+                    <div className="flex items-center justify-between text-[11px] font-mono leading-tight text-ink-3">
+                      <span>Trắng: 50.0%</span>
+                      <span className="px-1.5 py-0.2 rounded border border-line text-[10px] tabular-nums bg-inset text-ink-3">
+                        0.00
+                      </span>
+                      <span>Đen: 50.0%</span>
+                    </div>
+                    <div className="w-full h-1.5 rounded-full overflow-hidden bg-card flex">
+                      <div className="w-1/2 bg-line-strong h-full" />
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -374,9 +391,9 @@ export const EnginePanel: React.FC<EnginePanelProps> = ({
             </div>
           )}
 
-          {/* Danh sách MultiPV (chỉ khi mức phân tích Đầy đủ) */}
+          {/* Danh sách MultiPV (chiều cao cố định h-24 chống giật layout) */}
           {visibility.arrows ? (
-            <div className="space-y-1 max-h-28 overflow-y-auto">
+            <div className="h-24 overflow-y-auto space-y-1 pr-0.5">
               {analysis && analysis.lines.length > 0 ? (
                 analysis.lines.map((line, i) => {
                   const rankStyle = PV_RANK_STYLES[i] || PV_RANK_STYLES[2];
@@ -426,15 +443,20 @@ export const EnginePanel: React.FC<EnginePanelProps> = ({
                   );
                 })
               ) : (
-                <div className="text-xs text-ink-2 text-center py-2">
-                  {analysis?.is_game_over
-                    ? `Kết thúc (${analysis.result})`
-                    : 'Đang phân tích...'}
+                <div className="h-full flex items-center justify-center text-xs text-ink-3">
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-accent animate-ping" />
+                    <span>
+                      {analysis?.is_game_over
+                        ? `Kết thúc (${analysis.result})`
+                        : 'Đang phân tích nước cờ...'}
+                    </span>
+                  </div>
                 </div>
               )}
             </div>
           ) : (
-            <div className="text-xs text-ink-2 text-center py-1">
+            <div className="h-6 flex items-center justify-center text-xs text-ink-3">
               Mũi tên & gợi ý tắt ở mức “{ANALYSIS_LEVEL_LABELS[config.analysis].label}”.
             </div>
           )}
@@ -442,4 +464,4 @@ export const EnginePanel: React.FC<EnginePanelProps> = ({
       )}
     </div>
   );
-};
+});

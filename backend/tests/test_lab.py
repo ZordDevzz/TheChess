@@ -39,6 +39,37 @@ def test_build_round_robin_odd_participants_has_bye() -> None:
     assert games_per == {"A": 2, "B": 2, "C": 2}
 
 
+def test_build_round_robin_berger_color_balance_10_players() -> None:
+    """Kiểm tra 10 bot theo Berger FIDE: mọi bot đều có chênh lệch Trắng/Đen <= 1 (4-5 hoặc 5-4)."""
+    from collections import Counter
+    bot_ids = [f"bot_{i}" for i in range(10)]
+    schedule = build_round_robin(bot_ids, double_round=False)
+    assert len(schedule) == 45
+    w_cnt = Counter(s["white_bot_id"] for s in schedule)
+    b_cnt = Counter(s["black_bot_id"] for s in schedule)
+    for b in bot_ids:
+        assert abs(w_cnt[b] - b_cnt[b]) <= 1
+        assert w_cnt[b] in (4, 5)
+        assert b_cnt[b] in (4, 5)
+
+
+def test_build_round_robin_double_round() -> None:
+    """Kiểm tra đấu 2 lượt (Double Round-Robin): mọi cặp gặp nhau 2 trận đổi màu, 100% cân bằng."""
+    from collections import Counter
+    bot_ids = ["A", "B", "C", "D"]
+    schedule = build_round_robin(bot_ids, double_round=True)
+    # 4 bot -> 6 trận * 2 = 12 trận
+    assert len(schedule) == 12
+    w_cnt = Counter(s["white_bot_id"] for s in schedule)
+    b_cnt = Counter(s["black_bot_id"] for s in schedule)
+    for b in bot_ids:
+        assert w_cnt[b] == 3
+        assert b_cnt[b] == 3
+    # Kiểm tra mỗi cặp có đúng 1 trận A là Trắng và 1 trận B là Trắng
+    directed_pairs = {(s["white_bot_id"], s["black_bot_id"]) for s in schedule}
+    assert len(directed_pairs) == 12
+
+
 def test_compute_standings_points_and_order() -> None:
     participants = [
         {"bot_id": "A", "label": "Bot A"},

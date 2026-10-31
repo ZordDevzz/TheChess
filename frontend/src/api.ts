@@ -251,7 +251,8 @@ export async function fetchMeApi(): Promise<UserRecord> {
 
 export async function changePasswordApi(
   newPassword: string,
-  displayName?: string
+  displayName?: string,
+  currentPassword?: string
 ): Promise<{ token: string; user: UserRecord }> {
   const res = await fetch(`${API_BASE}/auth/change-password`, {
     method: 'POST',
@@ -259,6 +260,7 @@ export async function changePasswordApi(
     body: JSON.stringify({
       new_password: newPassword,
       display_name: displayName || undefined,
+      current_password: currentPassword || undefined,
     }),
   });
   if (!res.ok) {
@@ -400,15 +402,21 @@ export async function takebackMatchApi(
   return res.json();
 }
 
+export type FinishMatchAction = 'resign' | 'timeout' | 'claim_draw';
+
+/**
+ * Kết thúc ván theo HÀNH ĐỘNG — result do server tính từ biên bản & đồng hồ
+ * phía server (trọng tài server-side), client không tự khai kết quả nữa.
+ */
 export async function finishMatchApi(
   matchId: string,
-  result: '1-0' | '0-1' | '1/2-1/2',
-  termination = 'resign'
+  action: FinishMatchAction = 'resign',
+  playerUserId?: string
 ): Promise<MatchWithDetailsResponse> {
   const res = await fetch(`${API_BASE}/matches/${matchId}/finish`, {
     method: 'POST',
     headers: authHeaders(),
-    body: JSON.stringify({ result, termination }),
+    body: JSON.stringify({ action, player_user_id: playerUserId }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
@@ -511,11 +519,21 @@ export async function adminUpdateUserApi(
 }
 
 export async function adminGenerateQuickLinkApi(
-  targetUserId: string
+  targetUserId: string,
+  options?: {
+    must_change_password?: boolean;
+    reset_previous_links?: boolean;
+    ttl_days?: number;
+  }
 ): Promise<{ user: UserRecord; quick_login_token: string; lan_ip?: string }> {
+  const headers = authHeaders();
+  if (options) {
+    headers['Content-Type'] = 'application/json';
+  }
   const res = await fetch(`${API_BASE}/admin/users/${targetUserId}/quick-link`, {
     method: 'POST',
-    headers: authHeaders(),
+    headers,
+    body: options ? JSON.stringify(options) : undefined,
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
@@ -589,6 +607,7 @@ export async function listLabMatchesApi(): Promise<LabMatchListResponse> {
 export async function createLabTournamentApi(params: {
   name: string;
   bot_ids: string[];
+  double_round?: boolean;
 }): Promise<LabTournament> {
   const res = await fetch(`${API_BASE}/lab/tournaments`, {
     method: 'POST',

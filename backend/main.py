@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import chess
-from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Body, Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -39,6 +39,7 @@ from models import (
     CreateMatchRequest,
     CreateUserByAdminRequest,
     FinishMatchRequest,
+    GenerateQuickLinkRequest,
     JoinMatchRequest,
     LabCreateMatchRequest,
     LabCreateTournamentRequest,
@@ -569,27 +570,50 @@ async def _broadcast_match_event(match_id: str, event: str) -> None:
         )
     except Exception:  # noqa: BLE001 - broadcast không được làm hỏng request chính
         pass
-    await _publish_lobby_event(reason="move" if event == "match_updated" else event)
+    await _publish_lobby_event(
+        reason="move" if event == "match_updated" else event,
+        match_id=match_id if event == "match_updated" else None,
+    )
 
 
 _lobby_last_publish = 0.0
 
 
-async def _publish_lobby_event(reason: str) -> None:
+async def _publish_lobby_event(reason: str, match_id: Optional[str] = None) -> None:
     """
     Báo topic `lobby` có thay đổi (Sảnh/Phòng Lab refetch danh sách).
     Event nước đi bị throttle 1s (Lab chạy nền đi nước liên tục); event quan trọng
     (tạo/kết thúc/abort trận) luôn phát để không bao giờ bị bỏ lỡ.
+    Nếu có match_id kèm theo (khi move), đính kèm FEN và clock mới nhất để Sảnh cập nhật bàn live ngay lập tức.
     """
     global _lobby_last_publish
     now = time.monotonic()
     if reason == "move" and now - _lobby_last_publish < 1.0:
         return
     _lobby_last_publish = now
+
+    payload: Dict[str, Any] = {
+        "topic": "lobby",
+        "type": "lobby_updated",
+        "reason": reason,
+    }
+    if match_id and reason == "move":
+        m = db_manager.get_match_record(match_id)
+        if m:
+            payload.update(
+                {
+                    "match_id": match_id,
+                    "current_fen": m.current_fen,
+                    "total_plies": m.total_plies,
+                    "current_turn": m.current_turn,
+                    "white_clock_ms": m.white_clock_ms,
+                    "black_clock_ms": m.black_clock_ms,
+                    "status": m.status,
+                }
+            )
+
     try:
-        await topic_hub.publish(
-            "lobby", {"topic": "lobby", "type": "lobby_updated", "reason": reason}
-        )
+        await topic_hub.publish("lobby", payload)
     except Exception:  # noqa: BLE001
         pass
 
@@ -613,11 +637,23 @@ _CHAT_BODY_MAX = 500
 _CHAT_RATE_LIMIT = 5  # tối đa 5 tin / 10s / user / topic
 _CHAT_RATE_WINDOW = 10.0
 _chat_rate_buckets: Dict[str, List[float]] = {}
+_last_chat_rate_cleanup: float = 0.0
 
 
 def _check_chat_rate_limit(user_id: str, topic: str) -> bool:
     """True nếu được gửi. In-memory (1 process) — đủ cho quy mô CLB."""
+    global _last_chat_rate_cleanup
     now = time.monotonic()
+    if now - _last_chat_rate_cleanup > 60.0:
+        _last_chat_rate_cleanup = now
+        stale_keys = [
+            k
+            for k, timestamps in _chat_rate_buckets.items()
+            if not timestamps or (now - timestamps[-1] >= _CHAT_RATE_WINDOW)
+        ]
+        for k in stale_keys:
+            _chat_rate_buckets.pop(k, None)
+
     key = f"{user_id}:{topic}"
     bucket = [
         t for t in _chat_rate_buckets.get(key, []) if now - t < _CHAT_RATE_WINDOW
@@ -882,11 +918,19 @@ async def change_password(
     req: ChangePasswordRequest,
     user: UserRecord = Depends(get_current_user),
 ) -> AuthResponse:
-    updated = db_manager.change_own_password(
-        user.id, req.new_password, req.display_name
-    )
-    new_token = create_session_token(updated)
-    return AuthResponse(token=new_token, user=updated)
+    try:
+        updated = db_manager.change_own_password(
+            user.id,
+            req.new_password,
+            req.display_name,
+            current_password=req.current_password,
+        )
+        new_token = create_session_token(updated)
+        return AuthResponse(token=new_token, user=updated)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @app.get("/api/lobby")
@@ -909,6 +953,49 @@ async def get_lobby(
     waiting = db_manager.list_match_summaries(statuses=["waiting"], limit=20)
     live = db_manager.list_match_summaries(statuses=["playing"], limit=20)
 
+    def _parse_ts(val: Optional[str]) -> float:
+        if not val:
+            return 0.0
+        try:
+            return datetime.fromisoformat(val).timestamp()
+        except (ValueError, TypeError):
+            return 0.0
+
+    # 1. Sắp xếp ổn định danh sách phòng chờ (waiting):
+    # - 0: Có người gửi thách đấu trực tiếp tới tôi
+    # - 1: Phòng do chính tôi tạo
+    # - 2: Các phòng chờ mở công khai khác
+    # Tie-breaker: thời điểm tạo mới nhất (-created_at), id giảm dần
+    def _waiting_sort_key(item: MatchSummaryItem):
+        m = item.match
+        is_direct = m.white_user_id != m.black_user_id
+        is_challenging_me = is_direct and (
+            m.white_user_id == user.id or m.black_user_id == user.id
+        )
+        is_mine = m.white_user_id == user.id and m.black_user_id == user.id
+        rank = 0 if is_challenging_me else (1 if is_mine else 2)
+        return (rank, -_parse_ts(m.created_at), m.id)
+
+    waiting.sort(key=_waiting_sort_key)
+
+    # 2. Sắp xếp ổn định danh sách trận đang diễn ra (live):
+    # Tuyệt đối KHÔNG sort theo last_move_at để tránh các bàn đảo lộn vị trí khi có nước đi mới.
+    # - 0: Trận của chính user hiện tại (ưu tiên lên đầu để kỳ thủ không bị lạc bàn khi thi đấu)
+    # - 1: Trận có người chơi thật (human vs human / human vs bot)
+    # - 2: Trận biểu diễn AI vs AI
+    # Tie-breaker: thời điểm bắt đầu trận (-started_at hoặc -created_at), id giảm dần
+    def _live_sort_key(m: MatchSummaryItem):
+        is_my_match = (
+            0
+            if (m.match.white_user_id == user.id or m.match.black_user_id == user.id)
+            else 1
+        )
+        is_human = 0 if not m.is_system_exhibition else 1
+        start_ts = _parse_ts(m.match.started_at or m.match.created_at)
+        return (is_my_match, is_human, -start_ts, m.match.id)
+
+    live.sort(key=_live_sort_key)
+
     human_live = [m for m in live if not m.is_system_exhibition]
     featured: Optional[MatchSummaryItem] = None
 
@@ -926,6 +1013,9 @@ async def get_lobby(
         if step_exhibition:
             featured = await lab_manager.ensure_exhibition(viewer_elo=user.rating)
             live = db_manager.list_match_summaries(statuses=["playing"], limit=20)
+            live.sort(key=_live_sort_key)
+            if not featured and live:
+                featured = live[0]
         elif live:
             featured = live[0]
 
@@ -1289,6 +1379,7 @@ async def save_match_review_endpoint(
     req: SaveMatchReviewRequest,
     user: UserRecord = Depends(get_current_user),
 ) -> MatchRecord:
+    _require_match_participant(match_id, user)
     try:
         return db_manager.save_match_review(
             match_id=match_id,
@@ -1552,17 +1643,31 @@ async def admin_update_user(
 @app.post("/api/admin/users/{target_user_id}/quick-link")
 async def admin_generate_quick_link(
     target_user_id: str,
+    req: Optional[GenerateQuickLinkRequest] = Body(None),
     admin: UserRecord = Depends(get_current_admin),
 ) -> Dict[str, Any]:
-    target = db_manager.get_user_by_id(target_user_id)
-    if not target or target.is_bot:
-        raise HTTPException(status_code=404, detail="Không tìm thấy tài khoản người thật.")
-    quick_token = create_quick_login_token(target)
-    return {
-        "user": target,
-        "quick_login_token": quick_token,
-        "lan_ip": get_lan_ip(),
-    }
+    try:
+        must_change = req.must_change_password if req else None
+        reset_links = req.reset_previous_links if req else False
+        ttl_days = req.ttl_days if (req and req.ttl_days) else 14
+        user, quick_token = db_manager.generate_quick_link(
+            admin_user_id=admin.id,
+            target_user_id=target_user_id,
+            must_change_password=must_change,
+            reset_previous_links=reset_links,
+            ttl_days=ttl_days,
+        )
+        return {
+            "user": user,
+            "quick_login_token": quick_token,
+            "lan_ip": get_lan_ip(),
+        }
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @app.post("/api/admin/users/{target_user_id}/revoke", response_model=UserRecord)

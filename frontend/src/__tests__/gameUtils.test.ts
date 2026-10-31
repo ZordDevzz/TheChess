@@ -9,6 +9,8 @@ import {
   makeDefaultPlayers,
   recordsFromUciList,
   resolveFeatureVisibility,
+  getRankBadge,
+  formatLastSeen,
 } from '../gameUtils';
 import { GameConfig } from '../types';
 
@@ -218,4 +220,30 @@ test('recordsFromUciList & buildPgn: dựng biên bản chính xác và xuất P
 
   const pgn = buildPgn(STARTING_FEN, records);
   assert.ok(pgn.includes('1. e4 e5 2. Nf3'));
+});
+
+test('getRankBadge: phân loại chính xác các bậc rank Elo', () => {
+  assert.equal(getRankBadge(2300).tier, 'grandmaster');
+  assert.equal(getRankBadge(2300).badge, 'GM');
+
+  assert.equal(getRankBadge(1850).tier, 'expert');
+  assert.equal(getRankBadge(1850).badge, 'EXP');
+
+  assert.equal(getRankBadge(1550).tier, 'intermediate');
+  assert.equal(getRankBadge(1550).badge, 'INT');
+
+  assert.equal(getRankBadge(1200).tier, 'novice');
+  assert.equal(getRankBadge(1200).badge, 'NOV');
+});
+
+test('formatLastSeen: định dạng nhãn thời gian online/offline', () => {
+  assert.equal(formatLastSeen(null), 'Chưa từng online');
+  assert.equal(formatLastSeen(undefined), 'Chưa từng online');
+  assert.equal(formatLastSeen('invalid-date'), 'Ngoại tuyến');
+
+  const nowIso = new Date().toISOString();
+  assert.equal(formatLastSeen(nowIso), 'Vừa online');
+
+  const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+  assert.equal(formatLastSeen(fiveMinAgo), '5p trước');
 });

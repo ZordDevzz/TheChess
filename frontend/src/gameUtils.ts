@@ -620,3 +620,68 @@ export function detailRecordsToMoveRecords(details: MatchDetailRecord[]): MoveRe
     };
   });
 }
+
+// ---------------------------------------------------------------------------
+// Phân cấp Rank Elo & Định dạng Trạng thái Kỳ thủ
+// ---------------------------------------------------------------------------
+
+export interface RankBadgeInfo {
+  tier: 'grandmaster' | 'expert' | 'intermediate' | 'novice';
+  label: string;
+  badge: string;
+  colorClass: string;
+  bgClass: string;
+  borderClass: string;
+}
+
+export function getRankBadge(rating: number): RankBadgeInfo {
+  if (rating >= 2000) {
+    return {
+      tier: 'grandmaster',
+      label: 'Đại kiện tướng',
+      badge: 'GM',
+      colorClass: 'text-amber-300',
+      bgClass: 'bg-amber-400/15',
+      borderClass: 'border-amber-400/40',
+    };
+  }
+  if (rating >= 1700) {
+    return {
+      tier: 'expert',
+      label: 'Cao thủ',
+      badge: 'EXP',
+      colorClass: 'text-rose-300',
+      bgClass: 'bg-rose-500/15',
+      borderClass: 'border-rose-500/40',
+    };
+  }
+  if (rating >= 1400) {
+    return {
+      tier: 'intermediate',
+      label: 'Trung cấp',
+      badge: 'INT',
+      colorClass: 'text-sky-300',
+      bgClass: 'bg-sky-500/15',
+      borderClass: 'border-sky-500/40',
+    };
+  }
+  return {
+    tier: 'novice',
+    label: 'Tân thủ',
+    badge: 'NOV',
+    colorClass: 'text-emerald-300',
+    bgClass: 'bg-emerald-500/15',
+    borderClass: 'border-emerald-500/40',
+  };
+}
+
+export function formatLastSeen(lastSeenAt?: string | null): string {
+  if (!lastSeenAt) return 'Chưa từng online';
+  const ts = Date.parse(lastSeenAt);
+  if (Number.isNaN(ts)) return 'Ngoại tuyến';
+  const diffSec = Math.floor((Date.now() - ts) / 1000);
+  if (diffSec < 60) return 'Vừa online';
+  if (diffSec < 3600) return `${Math.floor(diffSec / 60)}p trước`;
+  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h trước`;
+  return `${Math.floor(diffSec / 86400)} ngày trước`;
+}

@@ -40,7 +40,6 @@ function buildWsUrl(token: string): string {
 const topicHandlers = new Map<string, Set<EventHandler>>();
 const connectedListeners = new Set<ConnectedListener>();
 let socket: WebSocket | null = null;
-let started = false;
 let disposed = false;
 let attempts = 0;
 let reconnectTimer = 0;
@@ -67,6 +66,17 @@ function connect() {
   if (disposed) return;
   const token = getAuthToken();
   if (!token) return;
+  if (
+    socket &&
+    (socket.readyState === WebSocket.OPEN ||
+      socket.readyState === WebSocket.CONNECTING)
+  ) {
+    return;
+  }
+  if (reconnectTimer) {
+    window.clearTimeout(reconnectTimer);
+    reconnectTimer = 0;
+  }
 
   socket = new WebSocket(buildWsUrl(token));
 
@@ -117,10 +127,18 @@ function connect() {
   };
 }
 
-function ensureStarted() {
-  if (started) return;
-  started = true;
+export function ensureStarted() {
   disposed = false;
+  if (
+    socket &&
+    (socket.readyState === WebSocket.OPEN ||
+      socket.readyState === WebSocket.CONNECTING)
+  ) {
+    return;
+  }
+  if (reconnectTimer) {
+    return;
+  }
   connect();
 }
 
@@ -130,7 +148,6 @@ function ensureStarted() {
  */
 export function resetRealtime() {
   disposed = true;
-  started = false;
   clearHeartbeat();
   if (reconnectTimer) window.clearTimeout(reconnectTimer);
   if (socket) {
@@ -175,12 +192,15 @@ export function useRealtime(): {
   connected: boolean;
   subscribe: (topic: string, handler: EventHandler) => () => void;
 } {
-  const [connected, setLocalConnected] = useState(false);
+  const [connected, setLocalConnected] = useState(
+    Boolean(socket && socket.readyState === WebSocket.OPEN)
+  );
 
   useEffect(() => {
     ensureStarted();
     const listener: ConnectedListener = (b) => setLocalConnected(b);
     connectedListeners.add(listener);
+    setLocalConnected(Boolean(socket && socket.readyState === WebSocket.OPEN));
     return () => {
       connectedListeners.delete(listener);
     };

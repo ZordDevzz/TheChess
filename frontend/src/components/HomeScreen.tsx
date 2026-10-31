@@ -21,6 +21,8 @@ import {
   Users,
   X,
   MessageSquare,
+  Search,
+  ArrowUpDown,
 } from 'lucide-react';
 import { fetchLobbyApi } from '../api';
 import { useRealtime } from '../hooks/useRealtime';
@@ -29,6 +31,7 @@ import {
   AnalysisLevel,
   GameModeId,
   LobbyResponse,
+  MatchRecord,
   MatchSummaryItem,
   PresetPosition,
   TimeControlType,
@@ -38,6 +41,8 @@ import {
   ANALYSIS_LEVEL_LABELS,
   MODE_PRESETS,
   STARTING_FEN,
+  formatLastSeen,
+  getRankBadge,
 } from '../gameUtils';
 import { cburnettPieces } from '../theme/pieces';
 import { useTheme } from '../theme/ThemeProvider';
@@ -74,42 +79,130 @@ interface HomeScreenProps {
   onOpenDm: (user: UserRecord) => void;
 }
 
-const TIME_PRESETS: Array<{
+export type TimePresetCategory = 'bullet' | 'blitz' | 'rapid' | 'other';
+
+export interface TimePresetItem {
   id: string;
   label: string;
   sub: string;
+  category: TimePresetCategory;
   type: TimeControlType;
   initialMs: number | null;
   incrementMs: number;
-}> = [
+}
+
+export const TIME_PRESETS: TimePresetItem[] = [
+  // --- BULLET (< 3m) ---
+  {
+    id: '1+0',
+    label: '1 + 0',
+    sub: 'Bullet',
+    category: 'bullet',
+    type: 'bullet',
+    initialMs: 60_000,
+    incrementMs: 0,
+  },
+  {
+    id: '1+1',
+    label: '1 + 1',
+    sub: 'Bullet',
+    category: 'bullet',
+    type: 'bullet',
+    initialMs: 60_000,
+    incrementMs: 1_000,
+  },
+  {
+    id: '2+1',
+    label: '2 + 1',
+    sub: 'Bullet',
+    category: 'bullet',
+    type: 'bullet',
+    initialMs: 120_000,
+    incrementMs: 1_000,
+  },
+
+  // --- BLITZ (3m - 5m) ---
+  {
+    id: '3+0',
+    label: '3 + 0',
+    sub: 'Blitz',
+    category: 'blitz',
+    type: 'blitz',
+    initialMs: 180_000,
+    incrementMs: 0,
+  },
   {
     id: '3+2',
     label: '3 + 2',
-    sub: 'Blitz',
+    sub: 'FIDE Blitz',
+    category: 'blitz',
     type: 'blitz',
     initialMs: 180_000,
     incrementMs: 2_000,
   },
   {
+    id: '5+0',
+    label: '5 + 0',
+    sub: 'Blitz',
+    category: 'blitz',
+    type: 'blitz',
+    initialMs: 300_000,
+    incrementMs: 0,
+  },
+  {
     id: '5+3',
     label: '5 + 3',
     sub: 'Blitz',
+    category: 'blitz',
     type: 'blitz',
     initialMs: 300_000,
     incrementMs: 3_000,
   },
+
+  // --- RAPID (10m - 30m) ---
   {
     id: '10+0',
     label: '10 + 0',
     sub: 'Rapid',
+    category: 'rapid',
     type: 'rapid',
     initialMs: 600_000,
     incrementMs: 0,
   },
   {
+    id: '10+5',
+    label: '10 + 5',
+    sub: 'Rapid',
+    category: 'rapid',
+    type: 'rapid',
+    initialMs: 600_000,
+    incrementMs: 5_000,
+  },
+  {
+    id: '15+10',
+    label: '15 + 10',
+    sub: 'FIDE Rapid',
+    category: 'rapid',
+    type: 'rapid',
+    initialMs: 900_000,
+    incrementMs: 10_000,
+  },
+  {
+    id: '30+0',
+    label: '30 + 0',
+    sub: 'Classical',
+    category: 'rapid',
+    type: 'rapid',
+    initialMs: 1_800_000,
+    incrementMs: 0,
+  },
+
+  // --- TỰ DO ---
+  {
     id: 'untimed',
     label: '∞',
     sub: 'Tự do',
+    category: 'other',
     type: 'untimed',
     initialMs: null,
     incrementMs: 0,
@@ -136,6 +229,26 @@ export function isPlayerRecentlyOnline(
   if (Number.isNaN(ts)) return false;
   return Date.now() - ts <= 5 * 60 * 1000;
 }
+
+export type UserPresenceTab =
+  | 'all'
+  | 'online'
+  | 'available'
+  | 'in_match'
+  | 'offline';
+
+export type UserRankFilter =
+  | 'all'
+  | 'grandmaster'
+  | 'expert'
+  | 'intermediate'
+  | 'novice';
+
+export type UserSortOption =
+  | 'presence'
+  | 'rating_desc'
+  | 'rating_asc'
+  | 'name_asc';
 
 export const HomeScreen: React.FC<HomeScreenProps> = ({
   currentUser,
@@ -165,6 +278,9 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   const [createMode, setCreateMode] = useState<GameModeId>('online');
   const [opponentType, setOpponentType] = useState<'ai' | 'human'>('human');
   const [timePresetId, setTimePresetId] = useState<string>('5+3');
+  const [timeCategory, setTimeCategory] = useState<
+    'all' | 'blitz' | 'rapid' | 'bullet' | 'other'
+  >('all');
   const [sideChoice, setSideChoice] = useState<'w' | 'b' | 'random'>('random');
   const [isRated, setIsRated] = useState(true);
   const [aiEngine, setAiEngine] = useState<'maia' | 'stockfish'>('maia');
@@ -190,6 +306,11 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
         : null,
     [startTab, selectedPresetId, presets, nonStandardPresets]
   );
+
+  const displayedTimePresets = React.useMemo(() => {
+    if (timeCategory === 'all') return TIME_PRESETS;
+    return TIME_PRESETS.filter((p) => p.category === timeCategory);
+  }, [timeCategory]);
 
   const selectedFen = selectedPreset ? selectedPreset.fen : STARTING_FEN;
   const startTurnSide: 'w' | 'b' = React.useMemo(() => {
@@ -222,6 +343,14 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   // State cho Lịch sử đấu (Cột phải dưới)
   const [historyTab, setHistoryTab] = useState<'mine' | 'club' | 'ai'>('mine');
 
+  // State cho Danh sách Kỳ thủ (Segment & Filter & Sort & Search)
+  const [userPresenceTab, setUserPresenceTab] =
+    useState<UserPresenceTab>('all');
+  const [userRankFilter, setUserRankFilter] = useState<UserRankFilter>('all');
+  const [userSortOption, setUserSortOption] =
+    useState<UserSortOption>('presence');
+  const [userSearchQuery, setUserSearchQuery] = useState('');
+
   const loadLobby = async (stepExhibition = true) => {
     try {
       const data = await fetchLobbyApi(stepExhibition);
@@ -234,21 +363,107 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   };
 
   // Realtime: topic `lobby` server báo có thay đổi (trận mới/kết thúc/nước đi)
-  // -> refetch ngay. Poll chỉ còn fallback chậm cho khi WS rớt.
-  const { subscribe: subscribeRealtime } = useRealtime();
+  // Cập nhật FEN & clock trực tiếp ngay khi nhận event WS, sau đó refetch REST
+  const { connected: wsConnected, subscribe: subscribeRealtime } = useRealtime();
   useEffect(() => {
-    return subscribeRealtime('lobby', () => {
+    return subscribeRealtime('lobby', (event) => {
+      if (
+        event.type === 'lobby_updated' &&
+        event.match_id &&
+        event.current_fen &&
+        typeof event.current_fen === 'string'
+      ) {
+        setLobby((prev) => {
+          if (!prev) return prev;
+          let changed = false;
+          let updatedFeatured = prev.featured_match;
+          if (
+            prev.featured_match &&
+            prev.featured_match.match.id === event.match_id
+          ) {
+            changed = true;
+            updatedFeatured = {
+              ...prev.featured_match,
+              match: {
+                ...prev.featured_match.match,
+                current_fen: event.current_fen as string,
+                total_plies:
+                  (event.total_plies as number) ??
+                  prev.featured_match.match.total_plies,
+                current_turn:
+                  (event.current_turn as 'w' | 'b') ??
+                  prev.featured_match.match.current_turn,
+                white_clock_ms:
+                  (event.white_clock_ms as number | null) ??
+                  prev.featured_match.match.white_clock_ms,
+                black_clock_ms:
+                  (event.black_clock_ms as number | null) ??
+                  prev.featured_match.match.black_clock_ms,
+                status:
+                  (event.status as MatchRecord['status']) ??
+                  prev.featured_match.match.status,
+              },
+            };
+          }
+
+          const updatedLive = prev.live_matches.map((item) => {
+            if (item.match.id === event.match_id) {
+              changed = true;
+              return {
+                ...item,
+                match: {
+                  ...item.match,
+                  current_fen: event.current_fen as string,
+                  total_plies:
+                    (event.total_plies as number) ?? item.match.total_plies,
+                  current_turn:
+                    (event.current_turn as 'w' | 'b') ??
+                    item.match.current_turn,
+                  white_clock_ms:
+                    (event.white_clock_ms as number | null) ??
+                    item.match.white_clock_ms,
+                  black_clock_ms:
+                    (event.black_clock_ms as number | null) ??
+                    item.match.black_clock_ms,
+                  status:
+                    (event.status as MatchRecord['status']) ??
+                    item.match.status,
+                },
+              };
+            }
+            return item;
+          });
+
+          return changed
+            ? {
+                ...prev,
+                featured_match: updatedFeatured,
+                live_matches: updatedLive,
+              }
+            : prev;
+        });
+      }
+
       loadLobby(true);
     });
   }, [subscribeRealtime]);
 
+  // Khi WS vừa kết nối (hoặc reconnect), fetch ngay để xóa khoảng trống đồng bộ ban đầu
+  useEffect(() => {
+    if (wsConnected) {
+      loadLobby(true);
+    }
+  }, [wsConnected]);
+
+  // Polling dự phòng: khi WS sống thì 30s là đủ; khi WS chưa nối thì 5s để không bị đóng băng
   useEffect(() => {
     loadLobby(true);
+    const intervalMs = wsConnected ? 30_000 : 5_000;
     const timer = window.setInterval(() => {
       loadLobby(true);
-    }, 30_000);
+    }, intervalMs);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [wsConnected]);
 
   const featuredMatch: MatchSummaryItem | null = React.useMemo(() => {
     if (!lobby) return null;
@@ -260,6 +475,70 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
     }
     return lobby.featured_match || lobby.live_matches[0] || null;
   }, [lobby, selectedLiveId]);
+
+  // Nếu trận đang chọn đã kết thúc và không còn trong live_matches, tự động reset selectedLiveId
+  useEffect(() => {
+    if (selectedLiveId && lobby) {
+      const stillLive = lobby.live_matches.some(
+        (m) => m.match.id === selectedLiveId
+      );
+      if (!stillLive) {
+        setSelectedLiveId(null);
+      }
+    }
+  }, [lobby, selectedLiveId]);
+
+  // Bộ đếm mềm đếm lùi cho bên tới lượt của trận tiêu điểm (giúp bàn cờ luôn sống động)
+  const [liveClocks, setLiveClocks] = useState<{
+    matchId: string;
+    whiteMs: number | null;
+    blackMs: number | null;
+    currentTurn: 'w' | 'b';
+  } | null>(null);
+
+  useEffect(() => {
+    if (!featuredMatch) {
+      setLiveClocks(null);
+      return;
+    }
+    setLiveClocks({
+      matchId: featuredMatch.match.id,
+      whiteMs: featuredMatch.match.white_clock_ms ?? null,
+      blackMs: featuredMatch.match.black_clock_ms ?? null,
+      currentTurn: featuredMatch.match.current_turn,
+    });
+  }, [
+    featuredMatch?.match.id,
+    featuredMatch?.match.total_plies,
+    featuredMatch?.match.white_clock_ms,
+    featuredMatch?.match.black_clock_ms,
+    featuredMatch?.match.current_turn,
+  ]);
+
+  useEffect(() => {
+    if (!featuredMatch || featuredMatch.match.status !== 'playing') return;
+    const interval = window.setInterval(() => {
+      setLiveClocks((prev) => {
+        if (!prev || prev.matchId !== featuredMatch.match.id) return prev;
+        if (
+          prev.currentTurn === 'w' &&
+          prev.whiteMs != null &&
+          prev.whiteMs > 0
+        ) {
+          return { ...prev, whiteMs: Math.max(0, prev.whiteMs - 1000) };
+        }
+        if (
+          prev.currentTurn === 'b' &&
+          prev.blackMs != null &&
+          prev.blackMs > 0
+        ) {
+          return { ...prev, blackMs: Math.max(0, prev.blackMs - 1000) };
+        }
+        return prev;
+      });
+    }, 1000);
+    return () => window.clearInterval(interval);
+  }, [featuredMatch?.match.id, featuredMatch?.match.status]);
 
   // Bản đồ user_id -> match_id đang thi đấu
   const activeMatchByUserId = React.useMemo(() => {
@@ -285,16 +564,141 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   }, [lobby]);
 
   const playersList = lobby?.online_players || [currentUser];
-  const onlineCount = playersList.filter(
-    (u) =>
-      isPlayerRecentlyOnline(u, currentUser.id) ||
-      activeMatchByUserId.has(u.id) ||
-      waitingByUserId.has(u.id)
-  ).length;
+
+  const getUserPresenceInfo = React.useCallback(
+    (p: UserRecord) => {
+      const activeMatchId = activeMatchByUserId.get(p.id) || null;
+      const waitingMatchId = waitingByUserId.get(p.id) || null;
+      const online =
+        isPlayerRecentlyOnline(p, currentUser.id) ||
+        Boolean(activeMatchId) ||
+        Boolean(waitingMatchId);
+
+      let state: 'in_match' | 'waiting' | 'available' | 'offline' = 'offline';
+      let label = formatLastSeen(p.last_seen_at);
+      let dotClass = 'bg-ink-3';
+      let textClass = 'text-ink-3';
+
+      if (activeMatchId) {
+        state = 'in_match';
+        label = 'Đang đấu';
+        dotClass = 'bg-amber-400 animate-pulse';
+        textClass = 'text-amber-300';
+      } else if (waitingMatchId) {
+        state = 'waiting';
+        label = 'Chờ đấu';
+        dotClass = 'bg-sky-400';
+        textClass = 'text-sky-300';
+      } else if (online) {
+        state = 'available';
+        label = 'Online';
+        dotClass = 'bg-emerald-400';
+        textClass = 'text-emerald-300';
+      }
+
+      return {
+        state,
+        label,
+        dotClass,
+        textClass,
+        activeMatchId,
+        waitingMatchId,
+        isOnline: online,
+      };
+    },
+    [activeMatchByUserId, waitingByUserId, currentUser.id]
+  );
+
+  const userCounts = React.useMemo(() => {
+    let online = 0;
+    let available = 0;
+    let inMatch = 0;
+    let offline = 0;
+
+    for (const p of playersList) {
+      const info = getUserPresenceInfo(p);
+      if (info.isOnline) online++;
+      if (info.state === 'available') available++;
+      if (info.state === 'in_match') inMatch++;
+      if (info.state === 'offline') offline++;
+    }
+
+    return { total: playersList.length, online, available, inMatch, offline };
+  }, [playersList, getUserPresenceInfo]);
+
+  const onlineCount = userCounts.online;
+
+  const filteredPlayers = React.useMemo(() => {
+    return playersList
+      .filter((p) => {
+        const info = getUserPresenceInfo(p);
+        const rank = getRankBadge(p.rating);
+
+        if (userPresenceTab === 'online' && !info.isOnline) return false;
+        if (userPresenceTab === 'available' && info.state !== 'available')
+          return false;
+        if (userPresenceTab === 'in_match' && info.state !== 'in_match')
+          return false;
+        if (userPresenceTab === 'offline' && info.isOnline) return false;
+
+        if (userRankFilter !== 'all' && rank.tier !== userRankFilter)
+          return false;
+
+        if (userSearchQuery.trim()) {
+          const q = userSearchQuery.trim().toLowerCase();
+          const matchName = (p.display_name || '').toLowerCase().includes(q);
+          const matchUsername = (p.username || '').toLowerCase().includes(q);
+          if (!matchName && !matchUsername) return false;
+        }
+
+        return true;
+      })
+      .sort((a, b) => {
+        if (userSortOption === 'rating_desc') {
+          if (b.rating !== a.rating) return b.rating - a.rating;
+          return a.username.localeCompare(b.username);
+        }
+        if (userSortOption === 'rating_asc') {
+          if (a.rating !== b.rating) return a.rating - b.rating;
+          return a.username.localeCompare(b.username);
+        }
+        if (userSortOption === 'name_asc') {
+          return a.display_name.localeCompare(b.display_name, 'vi', {
+            sensitivity: 'base',
+          });
+        }
+        // Mặc định: 'presence' (Trạng thái -> Elo -> Username), ghim chính mình lên đầu
+        const isMeA = a.id === currentUser.id ? 1 : 0;
+        const isMeB = b.id === currentUser.id ? 1 : 0;
+        if (isMeA !== isMeB) return isMeB - isMeA;
+
+        const infoA = getUserPresenceInfo(a);
+        const infoB = getUserPresenceInfo(b);
+        const rankOrder = { in_match: 0, waiting: 1, available: 2, offline: 3 };
+        const rA = rankOrder[infoA.state];
+        const rB = rankOrder[infoB.state];
+        if (rA !== rB) return rA - rB;
+
+        if (b.rating !== a.rating) return b.rating - a.rating;
+        return a.username.localeCompare(b.username);
+      });
+  }, [
+    playersList,
+    userPresenceTab,
+    userRankFilter,
+    userSearchQuery,
+    userSortOption,
+    currentUser.id,
+    getUserPresenceInfo,
+  ]);
 
   const handleSelectChallengePlayer = (player: UserRecord) => {
-    setChallengedPlayer(player);
-    handleSelectMode('online');
+    if (challengedPlayer?.id === player.id) {
+      setChallengedPlayer(null);
+    } else {
+      setChallengedPlayer(player);
+      handleSelectMode('online');
+    }
   };
 
   const handleQuickJoinCode = async (e: React.FormEvent) => {
@@ -474,14 +878,36 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
             <div className="space-y-3 shrink-0">
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
-                  <Radio className="w-4 h-4 text-emerald-400 animate-pulse" />
+                  <Radio
+                    className={`w-4 h-4 ${
+                      wsConnected
+                        ? 'text-emerald-400 animate-pulse'
+                        : 'text-amber-400'
+                    }`}
+                  />
                   <h2 className="font-display text-sm font-semibold text-ink">
                     Trực tiếp trên Sảnh
                   </h2>
+                  <span
+                    className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-mono border ${
+                      wsConnected
+                        ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                        : 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                    }`}
+                  >
+                    <span
+                      className={`w-1.5 h-1.5 rounded-full ${
+                        wsConnected
+                          ? 'bg-emerald-400 animate-ping'
+                          : 'bg-amber-400'
+                      }`}
+                    />
+                    {wsConnected ? 'Live' : 'Đang kết nối...'}
+                  </span>
                   {featuredMatch?.is_system_exhibition && (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-inset border border-line text-[10px] text-ink-2 font-mono">
+                    <span className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-inset border border-line text-[10px] text-ink-2 font-mono">
                       <Sparkles className="w-3 h-3 text-accent" />
-                      Trận biểu diễn AI đồng hạng Elo
+                      Trận biểu diễn AI
                     </span>
                   )}
                 </div>
@@ -524,7 +950,14 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                   <div className="md:col-span-6 flex flex-col justify-between gap-3">
                     <div className="space-y-2">
                       {/* Kỳ thủ Đen */}
-                      <div className="flex items-center justify-between px-3 py-2 rounded-lg bg-card border border-line">
+                      <div
+                        className={`flex items-center justify-between px-3 py-2 rounded-lg bg-card border transition ${
+                          featuredMatch.match.current_turn === 'b' &&
+                          featuredMatch.match.status === 'playing'
+                            ? 'border-accent ring-1 ring-accent/30 shadow-xs'
+                            : 'border-line'
+                        }`}
+                      >
                         <div className="flex items-center gap-2 min-w-0">
                           <span className="w-3 h-3 rounded-xs bg-sq-b border border-line-strong shrink-0" />
                           <span className="text-xs font-semibold text-ink truncate">
@@ -535,7 +968,11 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                           </span>
                         </div>
                         <span className="font-mono text-xs font-semibold text-ink tabular-nums">
-                          {formatClockMs(featuredMatch.match.black_clock_ms)}
+                          {formatClockMs(
+                            liveClocks?.matchId === featuredMatch.match.id
+                              ? liveClocks.blackMs
+                              : featuredMatch.match.black_clock_ms
+                          )}
                         </span>
                       </div>
 
@@ -557,7 +994,14 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                       </div>
 
                       {/* Kỳ thủ Trắng */}
-                      <div className="flex items-center justify-between px-3 py-2 rounded-lg bg-card border border-line">
+                      <div
+                        className={`flex items-center justify-between px-3 py-2 rounded-lg bg-card border transition ${
+                          featuredMatch.match.current_turn === 'w' &&
+                          featuredMatch.match.status === 'playing'
+                            ? 'border-accent ring-1 ring-accent/30 shadow-xs'
+                            : 'border-line'
+                        }`}
+                      >
                         <div className="flex items-center gap-2 min-w-0">
                           <span className="w-3 h-3 rounded-xs bg-sq-w border border-line-strong shrink-0" />
                           <span className="text-xs font-semibold text-ink truncate">
@@ -568,7 +1012,11 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                           </span>
                         </div>
                         <span className="font-mono text-xs font-semibold text-ink tabular-nums">
-                          {formatClockMs(featuredMatch.match.white_clock_ms)}
+                          {formatClockMs(
+                            liveClocks?.matchId === featuredMatch.match.id
+                              ? liveClocks.whiteMs
+                              : featuredMatch.match.white_clock_ms
+                          )}
                         </span>
                       </div>
                     </div>
@@ -683,155 +1131,300 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
               )}
             </div>
 
-            {/* 2B. Danh sách Kỳ thủ trên Sảnh (Players Online) kèm nút Hồ sơ & Thách đấu */}
-            <div className="pt-2 border-t border-line space-y-2.5">
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <UserCheck className="w-4 h-4 text-emerald-400" />
+            {/* 2B. Danh sách Kỳ thủ trên Sảnh (Players Directory & Presence) */}
+            <div className="pt-3 border-t border-line space-y-3">
+              {/* Header: Tiêu đề + Thống kê + Tìm kiếm + Sắp xếp */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <Users className="w-4 h-4 text-accent" />
                   <h3 className="font-display text-sm font-semibold text-ink">
                     Kỳ thủ trên Sảnh
                   </h3>
                   <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 text-[10px] font-mono font-semibold">
-                    {onlineCount} trực tuyến
+                    {userCounts.online} trực tuyến
+                  </span>
+                  <span className="text-[10px] text-ink-3">
+                    / {userCounts.total} thành viên
                   </span>
                 </div>
-                <span className="text-[10px] text-ink-3">
-                  Chọn kỳ thủ để xem Hồ sơ hoặc Thách đấu trực tiếp
-                </span>
+
+                <div className="flex items-center gap-2">
+                  {/* Ô tìm kiếm nhanh */}
+                  <div className="relative flex-1 sm:w-44">
+                    <Search className="w-3.5 h-3.5 text-ink-3 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    <input
+                      type="text"
+                      value={userSearchQuery}
+                      onChange={(e) => setUserSearchQuery(e.target.value)}
+                      placeholder="Tìm kỳ thủ..."
+                      className="w-full pl-8 pr-7 py-1 text-xs rounded-md bg-inset border border-line focus:border-accent text-ink placeholder:text-ink-3 outline-none transition"
+                    />
+                    {userSearchQuery && (
+                      <button
+                        type="button"
+                        onClick={() => setUserSearchQuery('')}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-ink-3 hover:text-ink"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Sắp xếp */}
+                  <div className="flex items-center gap-1 bg-inset border border-line rounded-md px-2 py-1 shrink-0">
+                    <ArrowUpDown className="w-3 h-3 text-ink-3 shrink-0" />
+                    <select
+                      value={userSortOption}
+                      onChange={(e) =>
+                        setUserSortOption(
+                          e.target.value as
+                            | 'presence'
+                            | 'rating_desc'
+                            | 'rating_asc'
+                            | 'name_asc'
+                        )
+                      }
+                      className="bg-transparent text-[11px] text-ink font-medium outline-none cursor-pointer"
+                    >
+                      <option value="presence">Trạng thái & Elo</option>
+                      <option value="rating_desc">Elo cao nhất</option>
+                      <option value="rating_asc">Elo thấp nhất</option>
+                      <option value="name_asc">Tên A-Z</option>
+                    </select>
+                  </div>
+                </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {playersList.map((p) => {
-                  const isMe = p.id === currentUser.id;
-                  const activeMatchId = activeMatchByUserId.get(p.id) || null;
-                  const waitingMatchId = waitingByUserId.get(p.id) || null;
-                  const online =
-                    isPlayerRecentlyOnline(p, currentUser.id) ||
-                    Boolean(activeMatchId) ||
-                    Boolean(waitingMatchId);
-                  const isTargetChallenged = challengedPlayer?.id === p.id;
+              {/* Segmented Controls: Tabs Trạng thái & Lọc Rank */}
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5">
+                {/* Tabs trạng thái (Segment presence) */}
+                <div className="flex items-center gap-1 p-0.5 bg-inset rounded-lg border border-line text-xs overflow-x-auto max-w-full">
+                  <button
+                    type="button"
+                    onClick={() => setUserPresenceTab('all')}
+                    className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition cursor-pointer shrink-0 ${
+                      userPresenceTab === 'all'
+                        ? 'bg-card text-ink shadow-xs font-semibold'
+                        : 'text-ink-2 hover:text-ink'
+                    }`}
+                  >
+                    Tất cả ({userCounts.total})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setUserPresenceTab('online')}
+                    className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition flex items-center gap-1.5 cursor-pointer shrink-0 ${
+                      userPresenceTab === 'online'
+                        ? 'bg-card text-emerald-400 shadow-xs font-semibold'
+                        : 'text-ink-2 hover:text-ink'
+                    }`}
+                  >
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                    Trực tuyến ({userCounts.online})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setUserPresenceTab('available')}
+                    className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition flex items-center gap-1.5 cursor-pointer shrink-0 ${
+                      userPresenceTab === 'available'
+                        ? 'bg-card text-emerald-300 shadow-xs font-semibold'
+                        : 'text-ink-2 hover:text-ink'
+                    }`}
+                  >
+                    Sẵn sàng ({userCounts.available})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setUserPresenceTab('in_match')}
+                    className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition flex items-center gap-1.5 cursor-pointer shrink-0 ${
+                      userPresenceTab === 'in_match'
+                        ? 'bg-card text-amber-300 shadow-xs font-semibold'
+                        : 'text-ink-2 hover:text-ink'
+                    }`}
+                  >
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+                    Đang đấu ({userCounts.inMatch})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setUserPresenceTab('offline')}
+                    className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition cursor-pointer shrink-0 ${
+                      userPresenceTab === 'offline'
+                        ? 'bg-card text-ink shadow-xs font-semibold'
+                        : 'text-ink-2 hover:text-ink'
+                    }`}
+                  >
+                    Ngoại tuyến ({userCounts.offline})
+                  </button>
+                </div>
 
-                  return (
-                    <div
-                      key={p.id}
-                      className={`px-3 py-2.5 rounded-lg border transition flex items-center justify-between gap-2 ${
-                        isTargetChallenged
-                          ? 'bg-card border-accent ring-1 ring-accent'
-                          : 'bg-inset border-line hover:border-line-strong'
-                      }`}
+                {/* Filter cấp bậc Rank */}
+                <div className="flex items-center gap-1 text-[11px]">
+                  <span className="text-ink-3 text-[10px] hidden sm:inline">Hạng:</span>
+                  <select
+                    value={userRankFilter}
+                    onChange={(e) =>
+                      setUserRankFilter(
+                        e.target.value as
+                          | 'all'
+                          | 'grandmaster'
+                          | 'expert'
+                          | 'intermediate'
+                          | 'novice'
+                      )
+                    }
+                    className="bg-inset border border-line rounded-md px-2 py-1 text-[11px] text-ink outline-none cursor-pointer"
+                  >
+                    <option value="all">Tất cả cấp bậc</option>
+                    <option value="grandmaster">🏆 Đại kiện tướng (≥2000)</option>
+                    <option value="expert">💎 Cao thủ (1700-1999)</option>
+                    <option value="intermediate">🎖️ Trung cấp (1400-1699)</option>
+                    <option value="novice">♟️ Tân thủ (&lt;1400)</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Lưới hiển thị danh sách kỳ thủ */}
+              {filteredPlayers.length === 0 ? (
+                <div className="py-8 text-center text-xs text-ink-3 bg-inset rounded-lg border border-line">
+                  Không tìm thấy kỳ thủ nào phù hợp với bộ lọc hiện tại.
+                  <div className="mt-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setUserPresenceTab('all');
+                        setUserRankFilter('all');
+                        setUserSearchQuery('');
+                      }}
+                      className="text-accent hover:underline text-[11px] font-semibold cursor-pointer"
                     >
-                      <div
-                        onClick={() => setProfileUser(p)}
-                        className="flex items-center gap-2.5 min-w-0 cursor-pointer"
-                        title="Xem hồ sơ chi tiết"
-                      >
-                        <span
-                          className={`w-2.5 h-2.5 rounded-full shrink-0 ${
-                            activeMatchId
-                              ? 'bg-amber-400 animate-pulse'
-                              : waitingMatchId
-                              ? 'bg-sky-400'
-                              : online
-                              ? 'bg-emerald-400'
-                              : 'bg-ink-3'
-                          }`}
-                        />
+                      Đặt lại tất cả bộ lọc
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {filteredPlayers.map((p) => {
+                    const isMe = p.id === currentUser.id;
+                    const info = getUserPresenceInfo(p);
+                    const rank = getRankBadge(p.rating);
+                    const isTargetChallenged = challengedPlayer?.id === p.id;
 
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-xs font-semibold text-ink hover:text-accent truncate transition">
-                              {p.display_name}
-                            </span>
-                            {isMe && (
-                              <span className="px-1 py-0.2 rounded bg-accent/20 text-accent text-[9px] font-mono font-semibold shrink-0">
-                                BẠN
+                    return (
+                      <div
+                        key={p.id}
+                        className={`px-3 py-2.5 rounded-lg border transition flex items-center justify-between gap-2 ${
+                          isTargetChallenged
+                            ? 'bg-card border-accent ring-1 ring-accent'
+                            : isMe
+                            ? 'bg-card/70 border-accent/40 hover:border-accent'
+                            : 'bg-inset border-line hover:border-line-strong'
+                        }`}
+                      >
+                        {/* Cột trái: Thông tin kỳ thủ */}
+                        <div
+                          onClick={() => setProfileUser(p)}
+                          className="flex items-center gap-2.5 min-w-0 cursor-pointer"
+                          title="Xem hồ sơ chi tiết"
+                        >
+                          <span
+                            className={`w-2.5 h-2.5 rounded-full shrink-0 ${info.dotClass}`}
+                          />
+
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="text-xs font-semibold text-ink hover:text-accent truncate transition">
+                                {p.display_name}
                               </span>
-                            )}
-                          </div>
-                          <div className="flex items-center gap-1.5 text-[10px] font-mono text-ink-2">
-                            <span className="font-semibold text-ink">
-                              {p.rating} Elo
-                            </span>
-                            <span>·</span>
-                            <span>
-                              {p.wins}T/{p.draws}H/{p.losses}B
-                            </span>
-                            {activeMatchId && (
-                              <>
-                                <span>·</span>
-                                <span className="text-amber-300">Đang đấu</span>
-                              </>
-                            )}
-                            {!activeMatchId && waitingMatchId && (
-                              <>
-                                <span>·</span>
-                                <span className="text-sky-300">Phòng chờ</span>
-                              </>
-                            )}
-                            {!activeMatchId && !waitingMatchId && online && (
-                              <>
-                                <span>·</span>
-                                <span className="text-emerald-300">
-                                  Trực tuyến
+                              {isMe && (
+                                <span className="px-1 py-0.2 rounded bg-accent/20 text-accent text-[9px] font-mono font-semibold shrink-0">
+                                  BẠN
                                 </span>
-                              </>
-                            )}
-                            {!activeMatchId &&
-                              !waitingMatchId &&
-                              !online && (
-                                <>
-                                  <span>·</span>
-                                  <span className="text-ink-3">
-                                    Ngoại tuyến
-                                  </span>
-                                </>
                               )}
+                              <span
+                                className={`px-1 py-0.2 rounded text-[9px] font-mono font-semibold border shrink-0 ${rank.bgClass} ${rank.colorClass} ${rank.borderClass}`}
+                                title={`${rank.label} (Elo ${p.rating})`}
+                              >
+                                {rank.badge}
+                              </span>
+                            </div>
+
+                            <div className="flex items-center gap-1.5 text-[10px] font-mono text-ink-2 mt-0.5">
+                              <span className="font-semibold text-ink">
+                                {p.rating} Elo
+                              </span>
+                              <span>·</span>
+                              <span>
+                                {p.wins}T/{p.draws}H/{p.losses}B
+                              </span>
+                              <span>·</span>
+                              <span className={info.textClass}>
+                                {info.label}
+                              </span>
+                            </div>
                           </div>
                         </div>
-                      </div>
 
-                      <div className="flex items-center gap-1.5 shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => setProfileUser(p)}
-                          className="px-2 py-1 rounded bg-card hover:bg-panel border border-line text-[10px] font-medium text-ink-2 hover:text-ink inline-flex items-center gap-1 transition cursor-pointer"
-                          title={`Xem hồ sơ của ${p.display_name}`}
-                        >
-                          <UserCircle2 className="w-3 h-3" />
-                          Hồ sơ
-                        </button>
-
-                        {!isMe && (
-                          <>
+                        {/* Cột phải: Các nút tương tác dạng icon gọn gàng */}
+                        <div className="flex items-center gap-1 shrink-0">
+                          {info.activeMatchId && (
                             <button
                               type="button"
-                              onClick={() => onOpenDm(p)}
-                              className="px-2 py-1 rounded bg-card hover:bg-panel border border-line text-[10px] font-medium text-ink-2 hover:text-ink inline-flex items-center gap-1 transition cursor-pointer"
-                              title={`Nhắn tin riêng ${p.display_name}`}
+                              onClick={() => onOpenLiveMatch(info.activeMatchId!)}
+                              className="w-7 h-7 rounded-md bg-amber-400/10 hover:bg-amber-400/20 border border-amber-400/30 text-amber-300 flex items-center justify-center transition cursor-pointer"
+                              title="Xem trực tiếp ván cờ đang đấu"
+                              aria-label="Xem trực tiếp ván cờ đang đấu"
                             >
-                              <MessageSquare className="w-3 h-3" />
-                              Nhắn tin
+                              <Eye className="w-3.5 h-3.5" />
                             </button>
-                            <button
-                              type="button"
-                              onClick={() => handleSelectChallengePlayer(p)}
-                              className={`px-2.5 py-1 rounded text-[10px] font-semibold inline-flex items-center gap-1 transition cursor-pointer ${
-                                isTargetChallenged
-                                  ? 'bg-accent text-accent-ink'
-                                  : 'bg-accent/15 hover:bg-accent text-accent hover:text-accent-ink border border-accent/40'
-                              }`}
-                              title={`Thách đấu trực tiếp ${p.display_name}`}
-                            >
-                              <Swords className="w-3 h-3" />
-                            Thách đấu
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={() => setProfileUser(p)}
+                            className="w-7 h-7 rounded-md bg-card hover:bg-panel border border-line text-ink-2 hover:text-ink flex items-center justify-center transition cursor-pointer"
+                            title={`Xem hồ sơ của ${p.display_name}`}
+                            aria-label={`Xem hồ sơ của ${p.display_name}`}
+                          >
+                            <UserCircle2 className="w-3.5 h-3.5" />
                           </button>
-                          </>
-                        )}
+
+                          {!isMe && (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => onOpenDm(p)}
+                                className="w-7 h-7 rounded-md bg-card hover:bg-panel border border-line text-ink-2 hover:text-ink flex items-center justify-center transition cursor-pointer"
+                                title={`Nhắn tin riêng với ${p.display_name}`}
+                                aria-label={`Nhắn tin riêng với ${p.display_name}`}
+                              >
+                                <MessageSquare className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleSelectChallengePlayer(p)}
+                                className={`w-7 h-7 rounded-md flex items-center justify-center transition cursor-pointer ${
+                                  isTargetChallenged
+                                    ? 'bg-accent text-accent-ink shadow-sm'
+                                    : 'bg-accent/15 hover:bg-accent text-accent hover:text-accent-ink border border-accent/40'
+                                }`}
+                                title={
+                                  isTargetChallenged
+                                    ? `Đang chọn thách đấu ${p.display_name} (Nhấn để hủy)`
+                                    : `Thách đấu trực tiếp ${p.display_name}`
+                                }
+                                aria-label={`Thách đấu trực tiếp ${p.display_name}`}
+                              >
+                                <Swords className="w-3.5 h-3.5" />
+                              </button>
+                            </>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  );
-                })}
-              </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </div>
         </section>
@@ -1021,26 +1614,56 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
             {/* 3. Thời gian suy nghĩ (Fischer Clock) & Quân của bạn */}
             <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
               <div className="sm:col-span-7">
-                <label className="block text-[10px] text-ink-2 mb-1 flex items-center gap-1">
-                  <Clock className="w-3 h-3" />
-                  Thời gian (Fischer Clock)
-                </label>
-                <div className="grid grid-cols-4 gap-1">
-                  {TIME_PRESETS.map((tp) => {
+                <div className="flex items-center justify-between gap-1 mb-1">
+                  <label className="text-[10px] text-ink-2 flex items-center gap-1 font-medium">
+                    <Clock className="w-3 h-3 text-accent" />
+                    Thời gian
+                  </label>
+                  <div className="flex items-center gap-0.5 text-[9px] font-mono">
+                    {(
+                      [
+                        ['all', 'Tất cả'],
+                        ['blitz', 'Chớp'],
+                        ['rapid', 'Nhanh'],
+                        ['bullet', 'Siêu chớp'],
+                        ['other', 'Tự do'],
+                      ] as const
+                    ).map(([catKey, catLabel]) => (
+                      <button
+                        key={catKey}
+                        type="button"
+                        onClick={() => setTimeCategory(catKey)}
+                        className={`px-1.5 py-0.5 rounded transition cursor-pointer ${
+                          timeCategory === catKey
+                            ? 'bg-accent text-accent-ink font-semibold shadow-xs'
+                            : 'text-ink-3 hover:text-ink hover:bg-card'
+                        }`}
+                      >
+                        {catLabel}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="grid grid-cols-3 sm:grid-cols-4 gap-1">
+                  {displayedTimePresets.map((tp) => {
                     const active = timePresetId === tp.id;
                     return (
                       <button
                         key={tp.id}
                         type="button"
                         onClick={() => setTimePresetId(tp.id)}
-                        className={`py-1 px-1.5 rounded border text-center transition cursor-pointer ${
+                        className={`py-1 px-1 rounded border text-center transition cursor-pointer ${
                           active
-                            ? 'bg-card border-accent ring-1 ring-accent text-ink font-semibold'
-                            : 'bg-inset border-line text-ink-2 hover:text-ink'
+                            ? 'bg-card border-accent ring-1 ring-accent text-ink font-semibold shadow-xs'
+                            : 'bg-inset border-line text-ink-2 hover:text-ink hover:border-line-strong'
                         }`}
                       >
-                        <div className="font-mono text-[11px]">{tp.label}</div>
-                        <div className="text-[9px] text-ink-3">{tp.sub}</div>
+                        <div className="font-mono text-[11px] font-medium truncate">
+                          {tp.label}
+                        </div>
+                        <div className="text-[8px] text-ink-3 truncate">
+                          {tp.sub}
+                        </div>
                       </button>
                     );
                   })}

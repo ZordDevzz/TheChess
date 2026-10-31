@@ -30,6 +30,9 @@ export const PlayerCard: React.FC<PlayerCardProps> = ({
 
   return (
     <div
+      aria-label={`${player.name} (${side === 'w' ? 'Quân Trắng' : 'Quân Đen'})${
+        isTurn ? ' - Đang đến lượt đi' : ''
+      }`}
       className={`w-full h-10 flex items-center gap-2 px-3 rounded-md border text-xs transition ${
         isTurn ? 'bg-card border-line-strong shadow-xs' : 'bg-inset border-line'
       }`}

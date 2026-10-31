@@ -178,6 +178,12 @@ export const ChatBox: React.FC<ChatBoxProps> = ({
         )}
         {messages.map((m, i) => {
           const isMine = m.sender_id === currentUser.id;
+          const isMentioned =
+            !isMine &&
+            Boolean(currentUser.username) &&
+            m.body
+              .toLowerCase()
+              .includes(`@${currentUser.username.toLowerCase()}`);
           const prev = messages[i - 1];
           const grouped =
             !!prev &&
@@ -233,6 +239,8 @@ export const ChatBox: React.FC<ChatBoxProps> = ({
                   className={`px-2.5 py-1.5 rounded-2xl break-words whitespace-pre-wrap ${
                     isMine
                       ? 'bg-accent/25 border border-accent/30 text-ink rounded-br-sm'
+                      : isMentioned
+                      ? 'bg-accent/10 border border-accent/40 text-ink rounded-bl-sm ring-1 ring-accent/30'
                       : 'bg-inset border border-line text-ink rounded-bl-sm'
                   }`}
                 >
@@ -240,10 +248,20 @@ export const ChatBox: React.FC<ChatBoxProps> = ({
                     seg.mention ? (
                       <span
                         key={j}
-                        className={`font-semibold rounded px-0.5 ${
+                        onClick={() => {
+                          const uname = seg.text.slice(1);
+                          if (
+                            !locked &&
+                            uname.toLowerCase() !==
+                              currentUser.username?.toLowerCase()
+                          ) {
+                            insertMention(uname);
+                          }
+                        }}
+                        className={`font-semibold rounded px-1.5 py-0.5 inline-block my-0.5 transition ${
                           seg.isSelf
-                            ? 'bg-accent/40 text-accent-ink'
-                            : 'text-accent'
+                            ? 'bg-accent text-accent-ink shadow-xs cursor-default'
+                            : 'text-accent hover:underline cursor-pointer'
                         }`}
                       >
                         {seg.text}
