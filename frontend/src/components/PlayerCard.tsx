@@ -9,6 +9,7 @@ interface PlayerCardProps {
   side: 'w' | 'b';
   isTurn: boolean;
   isThinking?: boolean;
+  isDisconnected?: boolean;
   rating?: number | null;
   clockMs?: number | null;
   capturedSymbols?: string[];
@@ -21,6 +22,7 @@ export const PlayerCard: React.FC<PlayerCardProps> = ({
   side,
   isTurn,
   isThinking,
+  isDisconnected,
   rating,
   clockMs,
   capturedSymbols,
@@ -66,6 +68,12 @@ export const PlayerCard: React.FC<PlayerCardProps> = ({
       {isThinking && (
         <span className="shrink-0 text-[10px] text-emerald-400 animate-pulse font-mono">
           đang nghĩ…
+        </span>
+      )}
+      {isDisconnected && (
+        <span className="shrink-0 text-[10px] text-red-400 animate-pulse font-mono flex items-center gap-1">
+          <span className="w-1.5 h-1.5 rounded-full bg-red-400" />
+          mất kết nối
         </span>
       )}
 

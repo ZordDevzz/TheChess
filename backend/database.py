@@ -170,6 +170,9 @@ CREATE TABLE IF NOT EXISTS "match" (
     last_move_at TEXT,
     white_connected INTEGER NOT NULL DEFAULT 1 CHECK (white_connected IN (0, 1)),
     black_connected INTEGER NOT NULL DEFAULT 1 CHECK (black_connected IN (0, 1)),
+    is_paused INTEGER NOT NULL DEFAULT 0 CHECK (is_paused IN (0, 1)),
+    paused_at TEXT,
+    paused_by_user_id TEXT REFERENCES "user"(id) ON DELETE SET NULL,
 
     preset_id TEXT,
     initial_fen TEXT NOT NULL,
@@ -542,6 +545,15 @@ class DatabaseManager:
             conn.execute(
                 'ALTER TABLE "user" ADD COLUMN quick_link_epoch INTEGER NOT NULL DEFAULT 1'
             )
+        match_cols = {
+            r["name"] for r in conn.execute('PRAGMA table_info("match")').fetchall()
+        }
+        if "is_paused" not in match_cols:
+            conn.execute('ALTER TABLE "match" ADD COLUMN is_paused INTEGER NOT NULL DEFAULT 0')
+        if "paused_at" not in match_cols:
+            conn.execute('ALTER TABLE "match" ADD COLUMN paused_at TEXT')
+        if "paused_by_user_id" not in match_cols:
+            conn.execute('ALTER TABLE "match" ADD COLUMN paused_by_user_id TEXT')
         conn.execute(
             'CREATE INDEX IF NOT EXISTS ix_match_room_code_nocase ON "match"(room_code COLLATE NOCASE)'
         )
@@ -713,6 +725,9 @@ class DatabaseManager:
             last_move_at=row["last_move_at"],
             white_connected=bool(row["white_connected"]),
             black_connected=bool(row["black_connected"]),
+            is_paused=bool(row["is_paused"]) if "is_paused" in row.keys() else False,
+            paused_at=row["paused_at"] if "paused_at" in row.keys() else None,
+            paused_by_user_id=row["paused_by_user_id"] if "paused_by_user_id" in row.keys() else None,
             preset_id=row["preset_id"],
             initial_fen=row["initial_fen"],
             current_fen=row["current_fen"],
@@ -2050,33 +2065,336 @@ class DatabaseManager:
             ).fetchone()
             return self._row_to_match(updated)
 
+    def abort_match(
+        self, match_id: str, termination: str = "aborted"
+    ) -> MatchRecord:
+        """Hệ thống hủy một trận đấu (do bỏ cuộc sớm, không đi nước đầu, hoặc phòng chờ hết hạn)."""
+        now = utc_now_iso()
+        with self.connection() as conn:
+            match_row = conn.execute(
+                'SELECT * FROM "match" WHERE id = ?', (match_id,)
+            ).fetchone()
+            if not match_row:
+                raise KeyError(f"Không tìm thấy trận đấu id={match_id}")
+            if match_row["status"] in ("finished", "aborted"):
+                return self._row_to_match(match_row)
+            conn.execute(
+                """
+                UPDATE "match"
+                SET status = 'aborted',
+                    termination = ?,
+                    finished_at = ?,
+                    updated_at = ?
+                WHERE id = ? AND status IN ('waiting', 'setup', 'playing')
+                """,
+                (termination, now, now, match_id),
+            )
+            updated = conn.execute(
+                'SELECT * FROM "match" WHERE id = ?', (match_id,)
+            ).fetchone()
+            return self._row_to_match(updated)
+
     def abort_match_by_admin(self, admin_user_id: str, match_id: str) -> MatchRecord:
         """Admin đóng/hủy một phòng đấu bị treo (`waiting` hoặc `playing` -> `aborted`)."""
-        now = utc_now_iso()
         with self.connection() as conn:
             admin_row = conn.execute(
                 'SELECT role, is_active FROM "user" WHERE id = ?', (admin_user_id,)
             ).fetchone()
             if not admin_row or admin_row["role"] != "admin" or not admin_row["is_active"]:
                 raise PermissionError("Chỉ Admin mới có quyền đóng phòng đấu.")
+            match_row = conn.execute(
+                'SELECT status FROM "match" WHERE id = ?', (match_id,)
+            ).fetchone()
+            if not match_row:
+                raise KeyError(f"Không tìm thấy match id={match_id}")
+            if match_row["status"] in ("finished", "aborted"):
+                raise ValueError("Trận đấu đã kết thúc hoặc đã bị hủy trước đó.")
+        return self.abort_match(match_id, termination="aborted")
+
+    def touch_user_last_seen(self, user_id: str) -> None:
+        """Cập nhật last_seen_at cho user khi có heartbeat ping từ websocket."""
+        now = utc_now_iso()
+        with self.connection() as conn:
+            conn.execute('UPDATE "user" SET last_seen_at = ? WHERE id = ?', (now, user_id))
+
+    def pause_match(
+        self, match_id: str, paused_by_user_id: Optional[str] = None
+    ) -> MatchRecord:
+        """
+        Tạm dừng ván đấu (time-out / save game):
+        - Chốt đồng hồ bên đang đi theo thời gian đã trôi qua.
+        - Đặt is_paused = 1, paused_at = now, paused_by_user_id = user_id.
+        """
+        now = utc_now_iso()
+        now_dt = datetime.fromisoformat(now.replace("Z", "+00:00"))
+        with self.connection() as conn:
+            match_row = conn.execute(
+                'SELECT * FROM "match" WHERE id = ?', (match_id,)
+            ).fetchone()
+            if not match_row:
+                raise KeyError(f"Không tìm thấy ván đấu id={match_id}")
+            if match_row["status"] != "playing":
+                raise ValueError("Chỉ có thể tạm dừng ván đấu đang diễn ra.")
+            if match_row["is_paused"]:
+                return self._row_to_match(match_row)
+
+            white_clock = match_row["white_clock_ms"]
+            black_clock = match_row["black_clock_ms"]
+            turn = match_row["current_turn"]
+            anchor = match_row["last_move_at"] or match_row["started_at"] or match_row["created_at"]
+            if match_row["time_control_type"] != "untimed" and anchor:
+                try:
+                    anchor_dt = datetime.fromisoformat(anchor.replace("Z", "+00:00"))
+                    elapsed_ms = max(0.0, (now_dt - anchor_dt).total_seconds() * 1000.0)
+                    if turn == "w" and white_clock is not None:
+                        white_clock = max(0, int(white_clock - elapsed_ms))
+                    elif turn == "b" and black_clock is not None:
+                        black_clock = max(0, int(black_clock - elapsed_ms))
+                except (ValueError, TypeError):
+                    pass
 
             conn.execute(
                 """
                 UPDATE "match"
-                SET status = 'aborted',
-                    termination = 'aborted',
-                    finished_at = ?,
+                SET is_paused = 1,
+                    paused_at = ?,
+                    paused_by_user_id = ?,
+                    white_clock_ms = ?,
+                    black_clock_ms = ?,
                     updated_at = ?
-                WHERE id = ? AND status IN ('waiting', 'setup', 'playing')
+                WHERE id = ?
+                """,
+                (now, paused_by_user_id, white_clock, black_clock, now, match_id),
+            )
+            updated = conn.execute(
+                'SELECT * FROM "match" WHERE id = ?', (match_id,)
+            ).fetchone()
+            return self._row_to_match(updated)
+
+    def resume_match(self, match_id: str) -> MatchRecord:
+        """
+        Tiếp tục ván đấu đã tạm dừng:
+        - Đặt is_paused = 0, paused_at = NULL, paused_by_user_id = NULL.
+        - Cập nhật last_move_at = now (đặt lại mốc thời gian tính giờ, không bị trừ oan giây nào).
+        """
+        now = utc_now_iso()
+        with self.connection() as conn:
+            match_row = conn.execute(
+                'SELECT * FROM "match" WHERE id = ?', (match_id,)
+            ).fetchone()
+            if not match_row:
+                raise KeyError(f"Không tìm thấy ván đấu id={match_id}")
+            if not match_row["is_paused"]:
+                return self._row_to_match(match_row)
+
+            conn.execute(
+                """
+                UPDATE "match"
+                SET is_paused = 0,
+                    paused_at = NULL,
+                    paused_by_user_id = NULL,
+                    last_move_at = ?,
+                    updated_at = ?
+                WHERE id = ?
                 """,
                 (now, now, match_id),
             )
-            row = conn.execute(
+            updated = conn.execute(
                 'SELECT * FROM "match" WHERE id = ?', (match_id,)
             ).fetchone()
-            if not row:
-                raise KeyError(f"Không tìm thấy match id={match_id}")
-            return self._row_to_match(row)
+            return self._row_to_match(updated)
+
+    def set_user_connection_state(self, user_id: str, connected: bool) -> List[str]:
+        """
+        Cập nhật cờ white_connected / black_connected cho các trận đấu active của user.
+        Nếu trận là human vs bot và người chơi ngắt kết nối -> tự động tạm dừng (save game).
+        Trả về danh sách ID trận đấu bị thay đổi.
+        """
+        val = 1 if connected else 0
+        now = utc_now_iso()
+        affected: List[str] = []
+        auto_pause_ids: List[str] = []
+
+        with self.connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT m.id, m.status, m.is_paused, m.white_user_id, m.black_user_id,
+                       m.white_connected, m.black_connected,
+                       w.is_bot AS w_is_bot, b.is_bot AS b_is_bot
+                FROM "match" m
+                JOIN "user" w ON w.id = m.white_user_id
+                JOIN "user" b ON b.id = m.black_user_id
+                WHERE m.status IN ('waiting', 'playing')
+                  AND (m.white_user_id = ? OR m.black_user_id = ?)
+                """,
+                (user_id, user_id),
+            ).fetchall()
+            for r in rows:
+                mid = r["id"]
+                w_conn = r["white_connected"]
+                b_conn = r["black_connected"]
+                changed = False
+                if r["white_user_id"] == user_id and not r["w_is_bot"] and w_conn != val:
+                    w_conn = val
+                    changed = True
+                if r["black_user_id"] == user_id and not r["b_is_bot"] and b_conn != val:
+                    b_conn = val
+                    changed = True
+
+                # Nếu là ván đấu với Bot AI và người chơi ngắt kết nối -> tự động chuyển sang tạm dừng (save game)
+                is_vs_bot = (r["w_is_bot"] != r["b_is_bot"])
+                if not connected and is_vs_bot and r["status"] == "playing" and not r["is_paused"]:
+                    auto_pause_ids.append(mid)
+
+                if changed:
+                    conn.execute(
+                        """
+                        UPDATE "match"
+                        SET white_connected = ?, black_connected = ?, updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (w_conn, b_conn, now, mid),
+                    )
+                    affected.append(mid)
+
+        for pause_mid in auto_pause_ids:
+            try:
+                self.pause_match(pause_mid, paused_by_user_id=user_id)
+                if pause_mid not in affected:
+                    affected.append(pause_mid)
+            except Exception:
+                pass
+
+        return affected
+
+    def sweep_stale_matches(
+        self,
+        now_dt: Optional[datetime] = None,
+    ) -> Tuple[List[MatchRecord], List[MatchRecord]]:
+        """
+        Quét và giải phóng các ván đấu bị treo (stale / ghost matches):
+        1. Ván timed ('playing') đã cạn đồng hồ server:
+           - Nếu <= 1 nước: tự động abort (chưa khai cuộc, không trừ Elo).
+           - Nếu > 1 nước: hoàn tất với kết quả 'Hết thời gian' (timeout).
+        2. Ván 'playing' có người chơi mất kết nối:
+           - Nếu <= 1 nước và người tới lượt mất kết nối >= 60s: tự động abort.
+           - Nếu > 1 nước và mất kết nối >= 90s: xử thua do mất kết nối (bỏ cuộc).
+           - Nếu untimed và mất kết nối >= 300s (5 phút): xử thua do rời trận (bỏ cuộc).
+        3. Ván cả hai bên human đều mất kết nối:
+           - Nếu <= 1 nước hoặc untimed: abort sau 60s.
+        4. Phòng chờ 'waiting' bị bỏ quên:
+           - Quá 30 phút, hoặc creator mất kết nối > 5 phút: tự động abort.
+
+        Trả về: (finished_matches, aborted_matches)
+        """
+        if now_dt is None:
+            now_dt = datetime.now(timezone.utc)
+
+        finished_matches: List[MatchRecord] = []
+        aborted_matches: List[MatchRecord] = []
+
+        with self.read_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT m.*, w.is_bot AS w_is_bot, b.is_bot AS b_is_bot
+                FROM "match" m
+                JOIN "user" w ON w.id = m.white_user_id
+                JOIN "user" b ON b.id = m.black_user_id
+                WHERE m.status IN ('playing', 'waiting')
+                """
+            ).fetchall()
+
+        for r in rows:
+            m = self._row_to_match(r)
+            status = m.status
+            w_bot = bool(r["w_is_bot"])
+            b_bot = bool(r["b_is_bot"])
+            both_bots = w_bot and b_bot
+
+            anchor = m.last_move_at or m.started_at or m.created_at
+            try:
+                anchor_dt = datetime.fromisoformat(anchor.replace("Z", "+00:00"))
+                elapsed_sec = (now_dt - anchor_dt).total_seconds()
+            except (ValueError, TypeError):
+                elapsed_sec = 0.0
+
+            if status == "waiting":
+                creator_conn = m.white_connected
+                if (not w_bot and not creator_conn and elapsed_sec >= 300.0) or elapsed_sec >= 1800.0:
+                    aborted = self.abort_match(m.id, termination="Hết hạn phòng chờ")
+                    aborted_matches.append(aborted)
+                continue
+
+            # status == "playing"
+            if both_bots or m.is_paused:
+                continue
+
+            turn = m.current_turn
+            turn_is_bot = (turn == "w" and w_bot) or (turn == "b" and b_bot)
+            turn_conn = m.white_connected if turn == "w" else m.black_connected
+            both_disconnected = (not w_bot and not m.white_connected) and (not b_bot and not m.black_connected)
+
+            # 1. Kiểm tra cạn đồng hồ (timed match)
+            if m.time_control_type != "untimed":
+                clock_ms = (
+                    m.white_clock_ms if turn == "w" else m.black_clock_ms
+                ) or m.initial_time_ms
+                if clock_ms is not None:
+                    elapsed_ms = elapsed_sec * 1000.0
+                    if elapsed_ms >= clock_ms:
+                        if m.total_plies <= 1:
+                            aborted = self.abort_match(
+                                m.id, termination="Hủy ván do người chơi không đi nước đầu"
+                            )
+                            aborted_matches.append(aborted)
+                        else:
+                            result = "0-1" if turn == "w" else "1-0"
+                            finished = self.complete_match(
+                                m.id, result=result, termination="Hết thời gian"
+                            )
+                            finished_matches.append(finished)
+                        continue
+
+            # 2. Cả hai người chơi human đều mất kết nối
+            if both_disconnected and elapsed_sec >= 60.0:
+                if m.total_plies <= 1 or m.time_control_type == "untimed":
+                    aborted = self.abort_match(
+                        m.id, termination="Hủy ván do cả hai người chơi rời trận"
+                    )
+                    aborted_matches.append(aborted)
+                else:
+                    result = "0-1" if turn == "w" else "1-0"
+                    finished = self.complete_match(
+                        m.id, result=result, termination="Xử thua do rời trận (bỏ cuộc)"
+                    )
+                    finished_matches.append(finished)
+                continue
+
+            # 3. Người chơi tới lượt (human) bị mất kết nối
+            if not turn_is_bot and not turn_conn:
+                if m.total_plies <= 1 and elapsed_sec >= 60.0:
+                    aborted = self.abort_match(
+                        m.id, termination="Hủy ván do người chơi không đi nước đầu"
+                    )
+                    aborted_matches.append(aborted)
+                    continue
+                elif m.total_plies > 1:
+                    if m.time_control_type != "untimed" and elapsed_sec >= 90.0:
+                        result = "0-1" if turn == "w" else "1-0"
+                        finished = self.complete_match(
+                            m.id, result=result, termination="Xử thua do mất kết nối (bỏ cuộc)"
+                        )
+                        finished_matches.append(finished)
+                        continue
+                    elif m.time_control_type == "untimed" and elapsed_sec >= 300.0:
+                        result = "0-1" if turn == "w" else "1-0"
+                        finished = self.complete_match(
+                            m.id, result=result, termination="Xử thua do rời trận (bỏ cuộc)"
+                        )
+                        finished_matches.append(finished)
+                        continue
+
+        return (finished_matches, aborted_matches)
 
     def list_match_summaries(
         self,
@@ -2463,4 +2781,30 @@ class DatabaseManager:
                         (now, user_id),
                     )
             return cur.rowcount or 0
+
+    def delete_notifications(
+        self,
+        user_id: Optional[str] = None,
+        kind: Optional[str] = None,
+        match_id: Optional[str] = None,
+    ) -> int:
+        """Xóa các notification theo điều kiện (dọn turn cũ khi có nước mới hoặc khi kết thúc trận)."""
+        conditions = []
+        params = []
+        if user_id:
+            conditions.append("user_id = ?")
+            params.append(user_id)
+        if kind:
+            conditions.append("kind = ?")
+            params.append(kind)
+        if match_id:
+            conditions.append("payload_json LIKE ?")
+            params.append(f'%"{match_id}"%')
+        if not conditions:
+            return 0
+        where_clause = " AND ".join(conditions)
+        with self.connection() as conn:
+            cur = conn.execute(f'DELETE FROM "notification" WHERE {where_clause}', params)
+            return cur.rowcount or 0
+
 

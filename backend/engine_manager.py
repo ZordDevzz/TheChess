@@ -14,6 +14,7 @@ import math
 import os
 import random
 import shutil
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple
@@ -46,6 +47,11 @@ def get_maia_temperature(elo: int) -> float:
 MAX_POOL_SIZE = max(1, int(os.environ.get("THECHESS_ENGINE_POOL", "3")))
 MAX_ANALYSIS_CACHE = 256
 _FULL_STRENGTH_OPTS: Dict[str, Any] = {"UCI_LimitStrength": False, "Skill Level": 20}
+
+# Cấu hình Pool & Lifecycle cho Lc0 Maia
+MAX_LC0_PER_ELO = max(1, int(os.environ.get("THECHESS_MAX_LC0_PER_ELO", "2")))
+MAX_TOTAL_LC0 = max(2, int(os.environ.get("THECHESS_MAX_TOTAL_LC0", "6")))
+LC0_IDLE_TIMEOUT_SEC = max(60, int(os.environ.get("THECHESS_LC0_IDLE_TIMEOUT", "900")))  # 15 phút
 
 
 def find_stockfish_binary() -> Optional[str]:
@@ -89,6 +95,67 @@ class _EngineSlot:
         return self.transport is not None and not self.transport.is_closing()
 
 
+class _Lc0Slot:
+    """Một instance engine Lc0 Maia gắn với một mức Elo cụ thể, theo dõi thời gian rảnh (idle)."""
+
+    def __init__(self, transport: asyncio.SubprocessTransport, engine: chess.engine.UciProtocol, elo: int):
+        self.transport = transport
+        self.engine = engine
+        self.elo = elo
+        self.last_used = time.monotonic()
+
+    @property
+    def usable(self) -> bool:
+        return self.transport is not None and not self.transport.is_closing()
+
+
+def _find_instant_checkmate(board: chess.Board) -> Optional[chess.Move]:
+    """Tìm nước đi chiếu hết ngay lập tức (Checkmate in 1)."""
+    for move in board.legal_moves:
+        board.push(move)
+        is_mate = board.is_checkmate()
+        board.pop()
+        if is_mate:
+            return move
+    return None
+
+
+def _blunders_immediate_checkmate(board: chess.Board, move: chess.Move) -> bool:
+    """Kiểm tra xem nước đi có khiến đối phương có cơ hội chiếu hết ngay ở nước kế tiếp không."""
+    board.push(move)
+    has_mate = False
+    for opp_move in board.legal_moves:
+        board.push(opp_move)
+        if board.is_checkmate():
+            has_mate = True
+            board.pop()
+            break
+        board.pop()
+    board.pop()
+    return has_mate
+
+
+def _avoids_stalemate_or_unwanted_draw(board: chess.Board, move: chess.Move) -> bool:
+    """
+    Khi đối phương chỉ còn đúng Vua đơn độc và bên đi đang có ưu thế quân vượt trội,
+    tránh các nước dẫn đến hòa pat (Stalemate) hoặc lặp 3 lần thế cờ (Threefold Repetition).
+    """
+    opp_color = not board.turn
+    opp_pieces = board.occupied_co[opp_color]
+    # Đối phương chỉ có 1 quân (Vua)
+    if chess.popcount(opp_pieces) <= 1:
+        my_pieces = board.occupied_co[board.turn]
+        if chess.popcount(my_pieces) >= 2:
+            board.push(move)
+            causes_draw = (
+                board.is_stalemate()
+                or board.can_claim_threefold_repetition()
+            )
+            board.pop()
+            return not causes_draw
+    return True
+
+
 ProgressCallback = Callable[[int, int], None]
 
 
@@ -104,9 +171,10 @@ class EngineManager:
         self._all: List[_EngineSlot] = []
         self._spawn_lock = asyncio.Lock()
 
-        # Cache engine Lc0 theo Elo Maia (tránh spawn tiến trình mới mỗi nước)
-        self._lc0_cache: Dict[int, _EngineSlot] = {}
-        self._lc0_locks: Dict[int, asyncio.Lock] = {}
+        # Worker pool & vòng đời tiến trình Lc0 Maia
+        self._lc0_free: Dict[int, "asyncio.Queue[_Lc0Slot]"] = {}
+        self._lc0_all: List[_Lc0Slot] = []
+        self._lc0_spawn_lock = asyncio.Lock()
 
         # LRU cache kết quả phân tích theo FEN để tránh đánh giá lặp lại cùng thế cờ
         self._analysis_cache: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
@@ -164,12 +232,25 @@ class EngineManager:
         finally:
             self._release(slot)
 
-    async def _get_lc0(self, elo: int) -> Optional[chess.engine.UciProtocol]:
-        """Lấy (hoặc tạo) engine Lc0 dùng cho weight Maia tương ứng, tái sử dụng giữa các nước."""
-        cached = self._lc0_cache.get(elo)
-        if cached is not None and cached.usable:
-            return cached.engine
+    async def _evict_lc0_slot(self, slot: _Lc0Slot) -> None:
+        try:
+            await slot.engine.quit()
+        except Exception:
+            pass
+        if slot in self._lc0_all:
+            self._lc0_all.remove(slot)
 
+    async def _evict_idle_lc0(self) -> None:
+        """Đóng các instance Lc0 đã hết thời gian timeout (mặc định 15 phút không dùng)."""
+        now = time.monotonic()
+        to_evict = [
+            slot for slot in list(self._lc0_all)
+            if not slot.usable or (now - slot.last_used > LC0_IDLE_TIMEOUT_SEC)
+        ]
+        for slot in to_evict:
+            await self._evict_lc0_slot(slot)
+
+    async def _spawn_lc0(self, elo: int) -> Optional[_Lc0Slot]:
         lc0_bin = find_lc0_binary()
         weight_path = WEIGHTS_DIR / f"maia-{elo}.pb.gz"
         if not lc0_bin or not weight_path.exists():
@@ -177,11 +258,89 @@ class EngineManager:
 
         temp = get_maia_temperature(elo)
         transport, engine = await chess.engine.popen_uci(
-            [lc0_bin, f"--weights={weight_path}", f"--temperature={temp}"]
+            [lc0_bin, f"--weights={weight_path}", f"--policy-softmax-temp={temp}", f"--temperature={temp}"]
         )
-        slot = _EngineSlot(transport, engine)
-        self._lc0_cache[elo] = slot
-        return engine
+        slot = _Lc0Slot(transport, engine, elo)
+        self._lc0_all.append(slot)
+        return slot
+
+    @asynccontextmanager
+    async def lease_lc0(self, elo: int) -> AsyncIterator[Optional[chess.engine.UciProtocol]]:
+        """
+        Mượn một instance Lc0 cho mức Elo Maia tương ứng.
+        Hỗ trợ worker pool song song cho cùng Elo, tự động evict instance idle
+        và giới hạn tổng RAM sử dụng.
+        """
+        lc0_bin = find_lc0_binary()
+        weight_path = WEIGHTS_DIR / f"maia-{elo}.pb.gz"
+        if not lc0_bin or not weight_path.exists():
+            yield None
+            return
+
+        # Dọn các instance idle cũ
+        await self._evict_idle_lc0()
+
+        queue = self._lc0_free.setdefault(elo, asyncio.Queue())
+        slot: Optional[_Lc0Slot] = None
+
+        # 1. Kiểm tra slot rảnh trong queue của Elo này
+        while not queue.empty():
+            try:
+                candidate = queue.get_nowait()
+                if candidate.usable:
+                    slot = candidate
+                    break
+                else:
+                    await self._evict_lc0_slot(candidate)
+            except asyncio.QueueEmpty:
+                break
+
+        # 2. Nếu chưa có slot rảnh, kiểm tra có thể spawn thêm instance cho Elo này không
+        if slot is None:
+            async with self._lc0_spawn_lock:
+                while not queue.empty():
+                    try:
+                        candidate = queue.get_nowait()
+                        if candidate.usable:
+                            slot = candidate
+                            break
+                        else:
+                            await self._evict_lc0_slot(candidate)
+                    except asyncio.QueueEmpty:
+                        break
+
+                if slot is None:
+                    alive_for_elo = [s for s in self._lc0_all if s.elo == elo and s.usable]
+                    max_for_elo = 3 if elo == 1500 else MAX_LC0_PER_ELO
+
+                    if len(alive_for_elo) < max_for_elo:
+                        # Nếu tổng số instance Lc0 vượt quá MAX_TOTAL_LC0, evict instance idle lâu nhất của Elo khác
+                        if len(self._lc0_all) >= MAX_TOTAL_LC0:
+                            other_slots = [s for s in self._lc0_all if s.elo != elo]
+                            if other_slots:
+                                oldest = min(other_slots, key=lambda s: s.last_used)
+                                await self._evict_lc0_slot(oldest)
+
+                        slot = await self._spawn_lc0(elo)
+
+        # 3. Nếu đã đạt giới hạn max_for_elo và tất cả đang bận, chờ slot rảnh từ queue
+        if slot is None:
+            while slot is None:
+                candidate = await queue.get()
+                if candidate.usable:
+                    slot = candidate
+                else:
+                    await self._evict_lc0_slot(candidate)
+
+        slot.last_used = time.monotonic()
+        try:
+            yield slot.engine
+        finally:
+            slot.last_used = time.monotonic()
+            if slot.usable:
+                queue.put_nowait(slot)
+            else:
+                await self._evict_lc0_slot(slot)
 
     async def shutdown(self) -> None:
         for slot in self._all:
@@ -195,24 +354,28 @@ class EngineManager:
                 self._free.get_nowait()
             except asyncio.QueueEmpty:
                 break
-        for slot in self._lc0_cache.values():
+        for slot in list(self._lc0_all):
             try:
                 await slot.engine.quit()
             except Exception:
                 pass
-        self._lc0_cache = {}
+        self._lc0_all = []
+        self._lc0_free.clear()
 
     def get_status(self) -> Dict[str, Any]:
         sf_bin = find_stockfish_binary()
         lc0_bin = find_lc0_binary()
         maia_elos = list_maia_weights()
+        active_lc0 = len([s for s in self._lc0_all if s.usable])
         return {
             "stockfish_ready": sf_bin is not None,
             "stockfish_path": sf_bin,
             "lc0_binary_ready": lc0_bin is not None,
             "lc0_path": lc0_bin,
             "maia_weights_available": maia_elos,
+            "active_lc0_instances": active_lc0,
             "engine_pool_size": self._pool_size,
+
             "engines": [
                 {
                     "id": "maia",
@@ -411,25 +574,80 @@ class EngineManager:
             key=lambda x: abs(x - elo),
         )
 
-        # Trường hợp 1: Chạy Maia qua Lc0 binary + weight (engine được cache & tái sử dụng)
+        # Bước 0.5: Kiểm tra nước đi Chiếu hết ngay lập tức (Checkmate in 1)
+        instant_mate = _find_instant_checkmate(board)
+        if instant_mate is not None:
+            san = board.san(instant_mate)
+            board.push(instant_mate)
+            return {
+                "move_uci": instant_mate.uci(),
+                "move_san": san,
+                "from_square": chess.square_name(instant_mate.from_square),
+                "to_square": chess.square_name(instant_mate.to_square),
+                "fen_after": board.fen(),
+                "engine_used": (
+                    f"Maia {nearest_maia_elo} (Tactical Finish)"
+                    if engine_type == "maia"
+                    else "Stockfish (Tactical Finish)"
+                ),
+            }
+
+        # Trường hợp 1: Chạy Maia qua Lc0 binary + weight (có worker pool + tactical polish)
         if engine_type == "maia":
-            lc0_engine = await self._get_lc0(nearest_maia_elo)
-            if lc0_engine is not None:
-                lock = self._lc0_locks.setdefault(nearest_maia_elo, asyncio.Lock())
-                async with lock:
-                    res = await lc0_engine.play(board, chess.engine.Limit(nodes=1))
-                chosen_move = res.move
-                if chosen_move is not None:
-                    san = board.san(chosen_move)
-                    board.push(chosen_move)
-                    return {
-                        "move_uci": chosen_move.uci(),
-                        "move_san": san,
-                        "from_square": chess.square_name(chosen_move.from_square),
-                        "to_square": chess.square_name(chosen_move.to_square),
-                        "fen_after": board.fen(),
-                        "engine_used": f"Maia {nearest_maia_elo} (Lc0 Neural Net)",
-                    }
+            async with self.lease_lc0(nearest_maia_elo) as lc0_engine:
+                if lc0_engine is not None:
+                    # Lấy top 5 nước đi ứng viên từ Policy Network ở nodes=1
+                    multipv_count = min(5, board.legal_moves.count())
+                    infos = await lc0_engine.analyse(
+                        board,
+                        chess.engine.Limit(nodes=1),
+                        multipv=multipv_count,
+                    )
+                    if isinstance(infos, dict):
+                        infos = [infos]
+
+                    candidates: List[chess.Move] = []
+                    for info in infos:
+                        pv = info.get("pv", [])
+                        if pv:
+                            candidates.append(pv[0])
+
+                    if not candidates:
+                        res = await lc0_engine.play(board, chess.engine.Limit(nodes=1))
+                        if res.move:
+                            candidates.append(res.move)
+
+                    # Lọc nước đi: tránh hòa pat khi đang thắng áp đảo & tránh blunder mate-in-1 ở Elo cao
+                    chosen_move: Optional[chess.Move] = None
+                    for m in candidates:
+                        # 1. Tránh hòa pat / lặp cờ khi đang thắng áp đảo ở tàn cuộc
+                        if not _avoids_stalemate_or_unwanted_draw(board, m):
+                            continue
+                        # 2. Đối với Elo >= 1500: Tránh nước tự sát (blunder mate-in-1) nếu còn nước an toàn
+                        if nearest_maia_elo >= 1500 and _blunders_immediate_checkmate(board, m):
+                            has_safe = any(
+                                not _blunders_immediate_checkmate(board, alt)
+                                for alt in board.legal_moves
+                            )
+                            if has_safe:
+                                continue
+                        chosen_move = m
+                        break
+
+                    if chosen_move is None and candidates:
+                        chosen_move = candidates[0]
+
+                    if chosen_move is not None:
+                        san = board.san(chosen_move)
+                        board.push(chosen_move)
+                        return {
+                            "move_uci": chosen_move.uci(),
+                            "move_san": san,
+                            "from_square": chess.square_name(chosen_move.from_square),
+                            "to_square": chess.square_name(chosen_move.to_square),
+                            "fen_after": board.fen(),
+                            "engine_used": f"Maia {nearest_maia_elo} (Lc0 Neural Net)",
+                        }
 
         # Trường hợp 2: Chế độ Maia (Human-like Policy Sampling) khi dùng qua core engine
         if engine_type == "maia":
@@ -452,6 +670,12 @@ class EngineManager:
                 if not pv:
                     continue
                 m = pv[0]
+                # Lọc tránh hòa pat ở tàn cuộc
+                if not _avoids_stalemate_or_unwanted_draw(board, m):
+                    continue
+                # Elo >= 1500 lọc blunder mate-in-1
+                if nearest_maia_elo >= 1500 and _blunders_immediate_checkmate(board, m):
+                    continue
                 sc = extract_score_white(info["score"])
                 win_for_mover = (
                     sc["win_percent_white"]
@@ -467,7 +691,9 @@ class EngineManager:
                 weights = [math.exp((w - max_w) / temp) for _, w in candidates]
                 chosen_move = random.choices([m for m, _ in candidates], weights=weights, k=1)[0]
             else:
-                chosen_move = random.choice(list(board.legal_moves))
+                legal = list(board.legal_moves)
+                safe_legal = [m for m in legal if _avoids_stalemate_or_unwanted_draw(board, m)]
+                chosen_move = random.choice(safe_legal if safe_legal else legal)
 
             san = board.san(chosen_move)
             board.push(chosen_move)

@@ -213,13 +213,32 @@ def test_turn_and_finished_notifications(client, players):
         for n in resp.json()["notifications"]
         if n["kind"] == "turn" and n["payload"]["match_id"] == match_id
     ]
-    assert turns, "bob phải nhận notification 'turn' sau nước của alice"
-    # 'turn' chỉ giữ 1 tin chưa đọc mới nhất
-    assert all(n["read_at"] is None for n in turns)
-    unread_before = resp.json()["unread"]
-    assert unread_before >= 1
+    assert len(turns) == 1, "bob phải nhận đúng 1 notification 'turn' sau nước của alice"
+    assert turns[0]["read_at"] is None
 
-    # Kết thúc ván -> cả 2 kỳ thủ nhận 'match_finished'
+    # Bob đi nước tiếp theo -> Bob đã xong lượt, notification 'turn' của Bob phải bị xóa sạch (không spam)
+    resp = send_move(client, bob["headers"], match_id, bob["id"], "e7e5")
+    assert resp.status_code == 200, resp.text
+    resp = client.get("/api/notifications", headers=bob["headers"])
+    bob_turns = [
+        n
+        for n in resp.json()["notifications"]
+        if n["kind"] == "turn" and n["payload"]["match_id"] == match_id
+    ]
+    assert len(bob_turns) == 0, "notification 'turn' của bob phải bị xóa sau khi bob đi nước"
+
+    # Alice đi nước tiếp (g1f3) -> tới lượt bob trở lại -> bob nhận đúng 1 turn mới
+    resp = send_move(client, alice["headers"], match_id, alice["id"], "g1f3")
+    assert resp.status_code == 200, resp.text
+    resp = client.get("/api/notifications", headers=bob["headers"])
+    bob_turns = [
+        n
+        for n in resp.json()["notifications"]
+        if n["kind"] == "turn" and n["payload"]["match_id"] == match_id
+    ]
+    assert len(bob_turns) == 1, "bob chỉ nhận duy nhất 1 notification 'turn' mới nhất"
+
+    # Kết thúc ván -> cả 2 kỳ thủ nhận 'match_finished', và dọn sạch notification 'turn' của ván
     resp = client.post(
         f"/api/matches/{match_id}/finish",
         json={"action": "resign"},
@@ -234,6 +253,13 @@ def test_turn_and_finished_notifications(client, players):
             if n["kind"] == "match_finished" and n["payload"]["match_id"] == match_id
         ]
         assert finished, f"{p['user']['username']} phải nhận 'match_finished'"
+        # Không còn turn notification nào của ván đấu này
+        remaining_turns = [
+            n
+            for n in resp.json()["notifications"]
+            if n["kind"] == "turn" and n["payload"]["match_id"] == match_id
+        ]
+        assert len(remaining_turns) == 0, "Tất cả notification 'turn' của ván phải được dọn sạch khi kết thúc"
 
 
 def test_mark_notifications_read(client, players):

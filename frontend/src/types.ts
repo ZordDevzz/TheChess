@@ -307,6 +307,9 @@ export interface MatchRecord {
   last_move_at?: string | null;
   white_connected: boolean;
   black_connected: boolean;
+  is_paused: boolean;
+  paused_at?: string | null;
+  paused_by_user_id?: string | null;
   preset_id?: string | null;
   initial_fen: string;
   current_fen: string;
@@ -392,6 +395,7 @@ export interface LobbyResponse {
   waiting_matches: MatchSummaryItem[];
   live_matches: MatchSummaryItem[];
   featured_match?: MatchSummaryItem | null;
+  my_paused_match?: MatchSummaryItem | null;
   my_history: MatchSummaryItem[];
   club_history: MatchSummaryItem[];
   /** Lịch sử các ván AI (cả hai bên bot: vs_ai bot-vs-bot + Lab) */

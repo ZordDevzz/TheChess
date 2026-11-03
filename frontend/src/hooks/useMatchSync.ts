@@ -12,6 +12,7 @@ import {
 } from '../types';
 import { detailRecordsToMoveRecords } from '../gameUtils';
 import { ToastKind } from '../components/Toasts';
+import { soundManager } from '../utils/sound';
 
 interface UseMatchSyncParams {
   screen: AppScreen;
@@ -151,11 +152,28 @@ export function useMatchSync({
           return;
         }
 
-        // Cập nhật biên bản nếu có nước đi mới từ đối thủ hoặc hệ thống
-        if (
+        // Cập nhật biên bản nếu có nước đi mới hoặc trạng thái ván đấu thay đổi (status, pause, connection)
+        const stateChanged =
           res.moves.length !== movesLenRef.current ||
-          m.status !== prevStatus
-        ) {
+          m.status !== prevStatus ||
+          m.is_paused !== activeMatch.is_paused ||
+          m.white_connected !== activeMatch.white_connected ||
+          m.black_connected !== activeMatch.black_connected;
+
+        if (stateChanged) {
+          const hasNewMoves = res.moves.length > movesLenRef.current;
+          if (hasNewMoves && movesLenRef.current > 0) {
+            const lastMove = res.moves[res.moves.length - 1];
+            if (isSpectator || lastMove.player_user_id !== currentUser?.id) {
+              const san = lastMove.san || '';
+              const isCapture = Boolean(lastMove.piece_captured || san.includes('x'));
+              const isCheckmate = Boolean(lastMove.is_checkmate || san.includes('#'));
+              const isCheck = Boolean(lastMove.is_check || san.includes('+'));
+              const isCastle = Boolean(lastMove.is_castling || san.startsWith('O-O'));
+              soundManager.playMove({ isCapture, isCheck, isCheckmate, isCastle });
+            }
+          }
+
           setActiveMatch(m);
           const built = detailRecordsToMoveRecords(res.moves);
           setMoves((prevMoves) =>
@@ -202,13 +220,26 @@ export function useMatchSync({
             setPhase('finished');
             const winner =
               m.result === '1-0' ? 'w' : m.result === '0-1' ? 'b' : null;
+            const resVal = m.result === '*' ? '1/2-1/2' : m.result;
             setGameOver({
-              result: m.result === '*' ? '1/2-1/2' : m.result,
+              result: resVal,
               reason: m.termination || 'Kết thúc ván đấu',
               winner,
             });
             if (!isSpectator) {
               setShowGameOver(true);
+              const userColor =
+                currentUser?.id === m.white_user_id
+                  ? 'w'
+                  : currentUser?.id === m.black_user_id
+                  ? 'b'
+                  : null;
+              soundManager.playGameOver(
+                resVal === '1-0' || resVal === '0-1' || resVal === '1/2-1/2'
+                  ? resVal
+                  : '1/2-1/2',
+                userColor
+              );
             } else if (res.white_player?.is_bot && res.black_player?.is_bot) {
               // Nếu đang xem trận biểu diễn AI vs AI và ván kết thúc, tự động chuyển sang ván biểu diễn mới
               pushToast(
@@ -263,6 +294,9 @@ export function useMatchSync({
     activeMatch?.id,
     activeMatch?.status,
     activeMatch?.mode,
+    activeMatch?.is_paused,
+    activeMatch?.white_connected,
+    activeMatch?.black_connected,
     currentUser,
     isSpectator,
     wsConnected,

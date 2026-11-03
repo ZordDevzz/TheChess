@@ -129,10 +129,11 @@ export const ReviewScreen: React.FC<ReviewScreenProps> = ({
   }, [onUpdateReviewLines]);
 
   // Đổi nước chọn -> tự phân tích thế cờ trước nước đó (MultiPV gợi ý thay thế)
+  const currentFenBefore = currentPly > 0 ? moves[currentPly - 1]?.fenBefore : null;
   useEffect(() => {
     setDetail(null);
     const mv = currentPly > 0 ? moves[currentPly - 1] : null;
-    if (!mv) {
+    if (!mv || !mv.fenBefore) {
       detailPlyRef.current = -1;
       setDetailLoading(false);
       return;
@@ -153,11 +154,10 @@ export const ReviewScreen: React.FC<ReviewScreenProps> = ({
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentPly]);
+  }, [currentPly, currentFenBefore]);
 
   const runDetailAnalysis = async () => {
-    if (!selectedMove) return;
+    if (!selectedMove || !selectedMove.fenBefore) return;
     detailPlyRef.current = currentPly;
     setDetailLoading(true);
     try {
@@ -171,18 +171,24 @@ export const ReviewScreen: React.FC<ReviewScreenProps> = ({
   };
 
   // Win% (theo góc nhìn Trắng) trước nước đi, suy ra từ sau + mức mất
-  const afterWin = selectedMove?.winPercentWhite;
-  const winLoss = selectedMove?.winLoss;
+  const afterWin =
+    typeof selectedMove?.winPercentWhite === 'number' && Number.isFinite(selectedMove.winPercentWhite)
+      ? selectedMove.winPercentWhite
+      : undefined;
+  const winLoss =
+    typeof selectedMove?.winLoss === 'number' && Number.isFinite(selectedMove.winLoss)
+      ? selectedMove.winLoss
+      : undefined;
   const beforeWin =
-    afterWin !== undefined && winLoss !== undefined
-      ? selectedMove!.turn === 'w'
+    afterWin !== undefined && winLoss !== undefined && selectedMove
+      ? selectedMove.turn === 'w'
         ? afterWin + winLoss
         : afterWin - winLoss
       : null;
 
   // Góc nhìn bên đi nước: gain dương = nước tốt hơn nước đã đi
   const moverWin = (winWhite: number) =>
-    selectedMove!.turn === 'w' ? winWhite : 100 - winWhite;
+    selectedMove ? (selectedMove.turn === 'w' ? winWhite : 100 - winWhite) : winWhite;
   const playedMoverWin =
     afterWin !== undefined ? moverWin(afterWin) : null;
 
@@ -201,6 +207,7 @@ export const ReviewScreen: React.FC<ReviewScreenProps> = ({
     const badgeColor =
       (m?.classification && CLASSIFICATION_META[m.classification]?.color) ||
       m?.color;
+    const hasWinLoss = typeof m?.winLoss === 'number' && Number.isFinite(m.winLoss);
     return m ? (
       <button
         onClick={() => onSelectPly(m.ply)}
@@ -219,14 +226,14 @@ export const ReviewScreen: React.FC<ReviewScreenProps> = ({
         />
         <span className="truncate">{m.san}</span>
         <span className="flex-1" />
-        {m.winLoss !== undefined && (
+        {hasWinLoss && (
           <span
             className={`shrink-0 text-[10px] font-mono tabular-nums ${winLossClass(
-              m.winLoss
+              m.winLoss!
             )}`}
-            title={`Mất ${m.winLoss.toFixed(1)}% cơ hội thắng`}
+            title={`Mất ${m.winLoss!.toFixed(1)}% cơ hội thắng`}
           >
-            −{m.winLoss.toFixed(1)}
+            −{m.winLoss!.toFixed(1)}
           </span>
         )}
       </button>
@@ -315,8 +322,13 @@ export const ReviewScreen: React.FC<ReviewScreenProps> = ({
             {reviewResult ? (
               <div className="bg-inset rounded-lg border border-line px-2.5 py-2 grid grid-cols-2 gap-x-3 gap-y-1.5">
                 {CLASS_ORDER.map((item) => {
-                  const wCount = reviewResult.counts.w[item.key] ?? 0;
-                  const bCount = reviewResult.counts.b[item.key] ?? 0;
+                  const wCount =
+                    reviewResult.counts?.w?.[item.key] ??
+                    (reviewResult.counts as unknown as Record<string, number>)?.[item.key] ??
+                    0;
+                  const bCount =
+                    reviewResult.counts?.b?.[item.key] ??
+                    0;
                   return (
                     <div
                       key={item.key}
@@ -555,23 +567,22 @@ export const ReviewScreen: React.FC<ReviewScreenProps> = ({
                     ) : detail && detail.lines.length > 0 ? (
                       <div className="space-y-2">
                         {detail.lines.map((line, i) => {
-                          const isPlayed = line.move_uci === selectedMove.uci;
+                          const isPlayed = selectedMove ? line.move_uci === selectedMove.uci : false;
                           const playedWin =
                             playedMoverWin !== null
                               ? playedMoverWin
-                              : selectedMove.winPercentWhite !== undefined
+                              : typeof selectedMove?.winPercentWhite === 'number' && Number.isFinite(selectedMove.winPercentWhite)
                               ? moverWin(selectedMove.winPercentWhite)
-                              : detail.lines.find(
-                                  (l) => l.move_uci === selectedMove.uci
-                                )
-                              ? moverWin(
-                                  detail.lines.find(
-                                    (l) => l.move_uci === selectedMove.uci
-                                  )!.win_percent_white
-                                )
+                              : selectedMove
+                              ? (() => {
+                                  const matching = detail.lines.find((l) => l.move_uci === selectedMove.uci);
+                                  return matching && Number.isFinite(matching.win_percent_white)
+                                    ? moverWin(matching.win_percent_white)
+                                    : null;
+                                })()
                               : null;
                           const gain =
-                            playedWin !== null
+                            playedWin !== null && Number.isFinite(line.win_percent_white)
                               ? moverWin(line.win_percent_white) - playedWin
                               : null;
                           return (
@@ -649,7 +660,7 @@ export const ReviewScreen: React.FC<ReviewScreenProps> = ({
                                       type="button"
                                       onClick={() =>
                                         onTryAlternativeMove(
-                                          selectedMove.ply - 1,
+                                          selectedMove ? selectedMove.ply - 1 : 0,
                                           line.move_uci
                                         )
                                       }
@@ -683,7 +694,7 @@ export const ReviewScreen: React.FC<ReviewScreenProps> = ({
                         <div className="text-[10px] text-ink-2 text-right font-mono pt-1">
                           depth ~{detail.lines[0]?.depth ?? '—'} · gain tính
                           theo % cơ hội thắng của{' '}
-                          {selectedMove.turn === 'w' ? 'Trắng' : 'Đen'}
+                          {selectedMove?.turn === 'w' ? 'Trắng' : 'Đen'}
                         </div>
                       </div>
                     ) : (

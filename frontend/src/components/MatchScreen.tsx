@@ -2,7 +2,8 @@ import React, { Suspense } from 'react';
 import { Chess } from 'chess.js';
 import { Chessboard } from 'react-chessboard';
 import type { Arrow, Square } from 'react-chessboard/dist/chessboard/types';
-import { ListOrdered, MessageSquare } from 'lucide-react';
+import { ListOrdered, MessageSquare, AlertTriangle, RefreshCw } from 'lucide-react';
+import { ErrorBoundary } from './ErrorBoundary';
 import {
   AssistantEngineConfig,
   FeatureVisibility,
@@ -41,7 +42,7 @@ const LazyFallback: React.FC = () => (
 );
 
 export interface MatchScreenProps {
-  boardStageRef: React.RefObject<HTMLDivElement>;
+  boardStageRef: React.Ref<HTMLDivElement>;
   boardSize: number;
   showSideRails: boolean;
   activeTab: 'play' | 'editor';
@@ -69,6 +70,7 @@ export interface MatchScreenProps {
     side: 'w' | 'b';
     isTurn: boolean;
     isThinking?: boolean;
+    isDisconnected?: boolean;
     rating?: number | null;
     clockMs?: number | null;
   };
@@ -145,6 +147,7 @@ export interface MatchScreenProps {
   onSwitchSides: () => void;
   onNewGame: () => void;
   onOpenReview: (forceRun?: boolean) => void;
+  onResumeMatch?: () => void;
 }
 
 export const MatchScreen: React.FC<MatchScreenProps> = ({
@@ -236,6 +239,7 @@ export const MatchScreen: React.FC<MatchScreenProps> = ({
   onSwitchSides,
   onNewGame,
   onOpenReview,
+  onResumeMatch,
 }) => {
   const [sidebarTab, setSidebarTab] = React.useState<'moves' | 'chat'>('moves');
 
@@ -276,11 +280,11 @@ export const MatchScreen: React.FC<MatchScreenProps> = ({
   );
 
   return (
-    <div className="flex-1 min-h-0 w-full flex flex-col md:flex-row md:overflow-hidden">
+    <div className="flex-1 h-full min-h-0 w-full flex flex-col md:flex-row md:overflow-hidden">
       {/* Vùng bàn cờ trung tâm — tận dụng tối đa chiều dọc */}
       <div
         ref={boardStageRef}
-        className="relative flex-1 min-w-0 min-h-[360px] md:min-h-0 md:h-full bg-base flex items-center justify-center px-2 py-1.5 overflow-hidden"
+        className="relative flex-1 min-w-0 min-h-[360px] md:min-h-0 md:h-full bg-base flex items-center justify-center px-2 py-1 overflow-hidden"
       >
         {activeTab === 'play' && (
           /* Đối xứng 3 cột trên màn hình rộng: rail trái (bottomSide) · cột giữa (tên + bàn + tên) · rail phải (topSide) */
@@ -291,7 +295,7 @@ export const MatchScreen: React.FC<MatchScreenProps> = ({
               </div>
             )}
 
-            <div className="h-full flex flex-col items-center justify-center gap-1.5">
+            <div className="h-full flex flex-col items-center justify-center gap-1">
               {/* Trên: thẻ người chơi của bên ở trên bàn */}
               <div style={{ width: boardSize }} className="shrink-0">
                 <PlayerCard
@@ -308,6 +312,27 @@ export const MatchScreen: React.FC<MatchScreenProps> = ({
                   }
                 />
               </div>
+
+              {activeMatch?.is_paused && (
+                <div
+                  style={{ width: boardSize }}
+                  className="px-3 py-1.5 rounded-md bg-amber-500/15 border border-amber-500/30 text-amber-300 text-xs flex items-center justify-between shrink-0"
+                >
+                  <div className="flex items-center gap-1.5 font-medium">
+                    <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse shrink-0" />
+                    <span>Ván đấu đang tạm dừng (Time-out)</span>
+                  </div>
+                  {onResumeMatch && (
+                    <button
+                      type="button"
+                      onClick={onResumeMatch}
+                      className="px-2.5 py-0.5 rounded bg-amber-500 hover:bg-amber-400 text-ink font-semibold text-[11px] transition cursor-pointer"
+                    >
+                      Tiếp tục ván đấu
+                    </button>
+                  )}
+                </div>
+              )}
 
               <div
                 style={{ width: boardSize, height: boardSize }}
@@ -450,42 +475,101 @@ export const MatchScreen: React.FC<MatchScreenProps> = ({
         } shrink-0 min-h-[420px] md:min-h-0 md:h-full border-t md:border-t-0 md:border-l border-line bg-panel flex flex-col overflow-hidden transition-[width] duration-200`}
       >
         {activeTab === 'editor' ? (
-          <Suspense fallback={<LazyFallback />}>
-            <BoardEditor
-              boardMap={editorBoardMap}
-              onUpdateBoardMap={setEditorBoardMap}
-              selectedTool={editorTool}
-              onSelectTool={setEditorTool}
-              presets={presets}
-              onApplyPosition={onApplyCustomPosition}
-            />
-          </Suspense>
+          <ErrorBoundary
+            title="Không thể tải bộ chỉnh sửa bàn cờ"
+            fallback={(err, reset) => (
+              <div className="flex-1 min-h-[300px] flex flex-col items-center justify-center p-6 text-center bg-panel">
+                <div className="w-10 h-10 rounded-full bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-400 mb-3">
+                  <AlertTriangle className="w-5 h-5" />
+                </div>
+                <h4 className="font-display text-sm font-semibold text-ink mb-1">
+                  Không thể nạp công cụ chỉnh sửa
+                </h4>
+                <p className="text-xs text-ink-2 max-w-xs mb-4 leading-relaxed">
+                  {err.message || 'Đã xảy ra lỗi khi nạp thành phần chỉnh sửa bàn cờ.'}
+                </p>
+                <button
+                  type="button"
+                  onClick={reset}
+                  className="px-3 py-1.5 rounded-lg bg-accent hover:opacity-90 text-accent-ink text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  Thử lại
+                </button>
+              </div>
+            )}
+          >
+            <Suspense fallback={<LazyFallback />}>
+              <BoardEditor
+                boardMap={editorBoardMap}
+                onUpdateBoardMap={setEditorBoardMap}
+                selectedTool={editorTool}
+                onSelectTool={setEditorTool}
+                presets={presets}
+                onApplyPosition={onApplyCustomPosition}
+              />
+            </Suspense>
+          </ErrorBoundary>
         ) : reviewMode ? (
-          <Suspense fallback={<LazyFallback />}>
-            <ReviewScreen
-              onClose={() => setReviewMode(false)}
-              moves={moves}
-              currentPly={currentPly}
-              onSelectPly={(ply) => setCurrentPly(ply)}
-              reviewResult={reviewResult}
-              isReviewing={isReviewing}
-              reviewProgress={reviewProgress}
-              onRunReview={onRunGameReview}
-              onUpdateReviewLines={onUpdateReviewLines}
-              onTryAlternativeMove={onTryAlternativeMove}
-              arrowMode={reviewArrowMode}
-              onChangeArrowMode={onChangeReviewArrowMode}
-            />
+          <ErrorBoundary
+            title="Không thể tải giao diện phân tích"
+            fallback={(err, reset) => (
+              <div className="flex-1 min-h-[300px] flex flex-col items-center justify-center p-6 text-center bg-panel">
+                <div className="w-10 h-10 rounded-full bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-400 mb-3">
+                  <AlertTriangle className="w-5 h-5" />
+                </div>
+                <h4 className="font-display text-sm font-semibold text-ink mb-1">
+                  Không thể tải giao diện phân tích
+                </h4>
+                <p className="text-xs text-ink-2 max-w-xs mb-4 leading-relaxed">
+                  {err.message || 'Đã xảy ra sự cố khi tải dữ liệu phân tích ván đấu.'}
+                </p>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={reset}
+                    className="px-3 py-1.5 rounded-lg bg-accent hover:opacity-90 text-accent-ink text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    Thử lại
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setReviewMode(false)}
+                    className="px-3 py-1.5 rounded-lg bg-inset hover:bg-card border border-line text-xs text-ink-2 hover:text-ink transition cursor-pointer"
+                  >
+                    Đóng phân tích
+                  </button>
+                </div>
+              </div>
+            )}
+          >
+            <Suspense fallback={<LazyFallback />}>
+              <ReviewScreen
+                onClose={() => setReviewMode(false)}
+                moves={moves}
+                currentPly={currentPly}
+                onSelectPly={(ply) => setCurrentPly(ply)}
+                reviewResult={reviewResult}
+                isReviewing={isReviewing}
+                reviewProgress={reviewProgress}
+                onRunReview={onRunGameReview}
+                onUpdateReviewLines={onUpdateReviewLines}
+                onTryAlternativeMove={onTryAlternativeMove}
+                arrowMode={reviewArrowMode}
+                onChangeArrowMode={onChangeReviewArrowMode}
+              />
 
-            <EvalGraph
-              moves={moves}
-              currentPly={currentPly}
-              onSelectPly={(ply) => setCurrentPly(ply)}
-              reviewResult={reviewResult}
-              isReviewing={isReviewing}
-              embedded
-            />
-          </Suspense>
+              <EvalGraph
+                moves={moves}
+                currentPly={currentPly}
+                onSelectPly={(ply) => setCurrentPly(ply)}
+                reviewResult={reviewResult}
+                isReviewing={isReviewing}
+                embedded
+              />
+            </Suspense>
+          </ErrorBoundary>
         ) : (
           <>
             {/* Header chuyển Tab Sidebar nếu ván có chat */}

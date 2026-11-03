@@ -24,6 +24,7 @@ import {
 import { ensureStarted } from '../hooks/useRealtime';
 import { UserRecord } from '../types';
 import { ToastKind } from '../components/Toasts';
+import { useToast } from './ToastContext';
 
 interface AuthContextValue {
   currentUser: UserRecord | null;
@@ -49,8 +50,10 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 
 export const AuthProvider: React.FC<{
   children: React.ReactNode;
-  pushToast: (msg: string, kind?: ToastKind) => void;
-}> = ({ children, pushToast }) => {
+  pushToast?: (msg: string, kind?: ToastKind) => void;
+}> = ({ children, pushToast: propPushToast }) => {
+  const toastCtx = useToast();
+  const pushToast = propPushToast || toastCtx.pushToast;
   const [currentUser, setCurrentUser] = useState<UserRecord | null>(null);
   const [authChecking, setAuthChecking] = useState<boolean>(true);
   const [loginError, setLoginError] = useState<string | null>(null);
@@ -71,6 +74,9 @@ export const AuthProvider: React.FC<{
           ensureStarted();
           window.history.replaceState({}, '', window.location.pathname);
           setCurrentUser(res.user);
+          if (res.user.must_change_password) {
+            setShowPasswordModal(true);
+          }
           setAuthChecking(false);
           pushToast(
             `Xin chào ${res.user.display_name}! Đã đăng nhập qua Quick-Link.`,
@@ -113,12 +119,21 @@ export const AuthProvider: React.FC<{
     };
   }, [pushToast]);
 
+  useEffect(() => {
+    if (currentUser?.must_change_password) {
+      setShowPasswordModal(true);
+    }
+  }, [currentUser?.must_change_password]);
+
   const login = useCallback(async (username: string, password: string) => {
     setLoginError(null);
     const res = await loginApi(username, password);
     setAuthToken(res.token);
     ensureStarted();
     setCurrentUser(res.user);
+    if (res.user.must_change_password) {
+      setShowPasswordModal(true);
+    }
     return res.user;
   }, []);
 

@@ -11,6 +11,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Bell, BellOff, Volume2, VolumeX, Swords } from 'lucide-react';
 import type { NotificationItem, UserRecord } from '../types';
+import { soundManager } from '../utils/sound';
 
 const LS_PUSH_KEY = 'thechess_push_enabled';
 const LS_SOUND_KEY = 'thechess_sound_enabled';
@@ -24,36 +25,12 @@ export function isPushEnabled(): boolean {
 }
 
 export function isSoundEnabled(): boolean {
-  try {
-    return window.localStorage.getItem(LS_SOUND_KEY) !== '0'; // mặc định bật
-  } catch {
-    return true;
-  }
+  return soundManager.isEnabled();
 }
 
-/** Beep nhẹ không cần file audio (WebAudio oscillator). */
+/** Phát âm báo chuông / thông báo. */
 export function playTickSound(): void {
-  if (!isSoundEnabled()) return;
-  try {
-    const Ctx =
-      window.AudioContext ||
-      (window as unknown as { webkitAudioContext?: typeof AudioContext })
-        .webkitAudioContext;
-    if (!Ctx) return;
-    const ctx = new Ctx();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.frequency.value = 880;
-    osc.type = 'sine';
-    gain.gain.setValueAtTime(0.08, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.25);
-    osc.connect(gain).connect(ctx.destination);
-    osc.start();
-    osc.stop(ctx.currentTime + 0.25);
-    osc.onended = () => ctx.close();
-  } catch {
-    // ignore — audio không khả dụng
-  }
+  soundManager.playNotify();
 }
 
 /** Push browser (chỉ khi đã bật toggle + cấp quyền). Trả về true nếu hiện được. */
@@ -130,7 +107,14 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({
 }) => {
   const [open, setOpen] = useState(false);
   const [pushOn, setPushOn] = useState(isPushEnabled());
-  const [soundOn, setSoundOn] = useState(isSoundEnabled());
+  const [soundOn, setSoundOn] = useState(soundManager.isEnabled());
+
+  useEffect(() => {
+    return soundManager.subscribe(() => {
+      setSoundOn(soundManager.isEnabled());
+    });
+  }, []);
+
   const [permission, setPermission] = useState<string>(
     typeof Notification !== 'undefined' ? Notification.permission : 'denied'
   );
@@ -180,12 +164,7 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({
 
   const toggleSound = () => {
     const next = !soundOn;
-    setSoundOn(next);
-    try {
-      window.localStorage.setItem(LS_SOUND_KEY, next ? '1' : '0');
-    } catch {
-      // ignore
-    }
+    soundManager.setEnabled(next);
     if (next) playTickSound();
   };
 
@@ -203,6 +182,10 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({
     }
     setOpen(false);
   };
+
+  const visibleNotifications = notifications.filter(
+    (n) => n.kind !== 'turn' || !n.read_at
+  );
 
   return (
     <div ref={rootRef} className="relative shrink-0">
@@ -275,12 +258,12 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({
           </div>
 
           <div className="max-h-80 overflow-y-auto divide-y divide-line">
-            {notifications.length === 0 && (
+            {visibleNotifications.length === 0 && (
               <div className="px-3 py-6 text-center text-xs text-ink-3">
                 Chưa có thông báo nào.
               </div>
             )}
-            {notifications.map((n) => {
+            {visibleNotifications.map((n) => {
               const { text, hasMatch } = describeNotification(n);
               const clickable = hasMatch || n.kind === 'dm' || n.kind === 'mention';
               return (

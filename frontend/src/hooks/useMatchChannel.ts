@@ -7,7 +7,11 @@
 import { useEffect, useRef } from 'react';
 import { useRealtime } from './useRealtime';
 
-export type MatchChannelEventType = 'match_updated' | 'match_finished';
+export type MatchChannelEventType =
+  | 'match_updated'
+  | 'match_finished'
+  | 'match_paused'
+  | 'match_resumed';
 
 interface UseMatchChannelParams {
   matchId: string | null;
@@ -39,7 +43,9 @@ export function useMatchChannel({
     return subscribe(topic, (event) => {
       if (
         event.type === 'match_updated' ||
-        event.type === 'match_finished'
+        event.type === 'match_finished' ||
+        event.type === 'match_paused' ||
+        event.type === 'match_resumed'
       ) {
         onEventRef.current(event.type);
       }

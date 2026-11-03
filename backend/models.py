@@ -115,6 +115,9 @@ class MatchRecord(BaseModel):
     last_move_at: Optional[str] = None
     white_connected: bool = True
     black_connected: bool = True
+    is_paused: bool = False
+    paused_at: Optional[str] = None
+    paused_by_user_id: Optional[str] = None
 
     preset_id: Optional[str] = None
     initial_fen: str = STARTING_FEN
@@ -288,7 +291,7 @@ class TakebackMatchRequest(BaseModel):
     target_ply: int = Field(..., ge=0)
 
 
-FinishActionType = Literal["resign", "timeout", "claim_draw"]
+FinishActionType = Literal["resign", "timeout", "claim_draw", "pause", "resume"]
 
 
 class FinishMatchRequest(BaseModel):

@@ -46,19 +46,24 @@ export interface MatchModalsProps {
   onExportPgn: () => void;
 
   currentUser: UserRecord;
-  showPasswordModal: boolean;
-  setShowPasswordModal: (show: boolean) => void;
-  onPasswordChange: (
+  showPasswordModal?: boolean;
+  setShowPasswordModal?: (show: boolean) => void;
+  onPasswordChange?: (
     newPass: string,
     displayName: string,
     currentPass?: string
   ) => Promise<void>;
 
-  toasts: ToastItem[];
-  dismissToast: (id: number) => void;
+  toasts?: ToastItem[];
+  dismissToast?: (id: number) => void;
 
-  dmTarget: UserRecord | null;
-  setDmTarget: (user: UserRecord | null) => void;
+  dmTarget?: UserRecord | null;
+  setDmTarget?: (user: UserRecord | null) => void;
+
+  showPausePrompt?: boolean;
+  onConfirmPause?: () => void;
+  onDismissPausePrompt?: () => void;
+  resumeCountdown?: number | null;
 }
 
 export const MatchModals: React.FC<MatchModalsProps> = ({
@@ -101,6 +106,11 @@ export const MatchModals: React.FC<MatchModalsProps> = ({
 
   dmTarget,
   setDmTarget,
+
+  showPausePrompt,
+  onConfirmPause,
+  onDismissPausePrompt,
+  resumeCountdown,
 }) => {
   return (
     <>
@@ -150,28 +160,82 @@ export const MatchModals: React.FC<MatchModalsProps> = ({
         />
       )}
 
-      {/* Modal đổi mật khẩu (bắt buộc lần đầu hoặc chủ động từ UserDropdownMenu) */}
-      <ChangePasswordModal
-        open={currentUser.must_change_password || showPasswordModal}
-        mandatory={currentUser.must_change_password}
-        currentDisplayName={currentUser.display_name}
-        onSubmit={onPasswordChange}
-        onClose={
-          currentUser.must_change_password
-            ? undefined
-            : () => setShowPasswordModal(false)
-        }
-      />
+      {/* Modal đổi mật khẩu nếu có */}
+      {showPasswordModal && onPasswordChange && setShowPasswordModal && (
+        <ChangePasswordModal
+          open={currentUser.must_change_password || showPasswordModal}
+          mandatory={currentUser.must_change_password}
+          currentDisplayName={currentUser.display_name}
+          onSubmit={onPasswordChange}
+          onClose={
+            currentUser.must_change_password
+              ? undefined
+              : () => setShowPasswordModal(false)
+          }
+        />
+      )}
 
-      <Toasts toasts={toasts} onDismiss={dismissToast} />
+      {toasts && dismissToast && <Toasts toasts={toasts} onDismiss={dismissToast} />}
 
-      {/* Modal chat DM (mở từ Sảnh hoặc từ notification) */}
-      {dmTarget && (
+      {/* Modal chat DM nếu có */}
+      {dmTarget && setDmTarget && (
         <DmChatModal
           target={dmTarget}
           currentUser={currentUser}
           onClose={() => setDmTarget(null)}
         />
+      )}
+      {/* Modal hỏi ý kiến đối thủ khi phát hiện ngắt kết nối */}
+      {showPausePrompt && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="w-full max-w-md bg-card border border-line-strong rounded-xl shadow-2xl p-5 space-y-4 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center gap-2.5 text-amber-400">
+              <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-ping" />
+              <h3 className="font-display font-semibold text-base text-ink">
+                Đối thủ đã mất kết nối
+              </h3>
+            </div>
+            <p className="text-xs text-ink-2 leading-relaxed">
+              Đối thủ của bạn vừa bị ngắt kết nối khỏi phòng đấu. Bạn có đồng ý tạm dừng ván cờ (Time-out) để bảo lưu thế cờ và đồng hồ cho đến khi đối thủ kết nối lại không?
+            </p>
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={onDismissPausePrompt}
+                className="px-3 py-1.5 rounded-lg border border-line text-xs font-medium text-ink-2 hover:bg-inset hover:text-ink transition cursor-pointer"
+              >
+                Tiếp tục đợi đồng hồ
+              </button>
+              <button
+                type="button"
+                onClick={onConfirmPause}
+                className="px-4 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-ink font-semibold text-xs transition cursor-pointer shadow-xs"
+              >
+                Đồng ý tạm dừng (Time-out)
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal đếm ngược 3s khi kết nối lại để tiếp tục ván đấu */}
+      {typeof resumeCountdown === 'number' && resumeCountdown > 0 && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="w-full max-w-xs bg-card border border-line-strong rounded-2xl shadow-2xl p-6 text-center space-y-3 animate-in fade-in zoom-in-95 duration-150">
+            <div className="text-[11px] font-semibold text-emerald-400 uppercase tracking-wider font-mono">
+              Kỳ thủ đã sẵn sàng
+            </div>
+            <h3 className="font-display text-base font-bold text-ink">
+              Ván đấu tiếp tục sau
+            </h3>
+            <div className="text-5xl font-black font-mono text-accent animate-pulse my-2">
+              {resumeCountdown}
+            </div>
+            <p className="text-[11px] text-ink-3">
+              Đồng hồ và bàn cờ sẽ mở khóa ngay lập tức.
+            </p>
+          </div>
+        </div>
       )}
     </>
   );

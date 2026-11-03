@@ -102,18 +102,18 @@ export const PlayerProfileModal: React.FC<PlayerProfileModalProps> = ({
               <User className="w-5 h-5 text-accent" />
               <span
                 className={`w-3 h-3 rounded-full border-2 border-panel absolute -bottom-0.5 -right-0.5 ${
-                  activeMatchId
+                  !isOnline
+                    ? 'bg-ink-3'
+                    : activeMatchId
                     ? 'bg-amber-400'
-                    : isOnline
-                    ? 'bg-emerald-400'
-                    : 'bg-ink-3'
+                    : 'bg-emerald-400'
                 }`}
                 title={
-                  activeMatchId
+                  !isOnline
+                    ? 'Ngoại tuyến'
+                    : activeMatchId
                     ? 'Đang thi đấu'
-                    : isOnline
-                    ? 'Đang trực tuyến'
-                    : 'Ngoại tuyến'
+                    : 'Đang trực tuyến'
                 }
               />
             </div>
@@ -152,18 +152,18 @@ export const PlayerProfileModal: React.FC<PlayerProfileModalProps> = ({
                 <span>·</span>
                 <span
                   className={
-                    activeMatchId
+                    !isOnline
+                      ? 'text-ink-3'
+                      : activeMatchId
                       ? 'text-amber-300'
-                      : isOnline
-                      ? 'text-emerald-400'
-                      : 'text-ink-3'
+                      : 'text-emerald-400'
                   }
                 >
-                  {activeMatchId
+                  {!isOnline
+                    ? `○ Ngoại tuyến (${formatLastSeen(profileUser.last_seen_at)})`
+                    : activeMatchId
                     ? '● Đang trong bàn đấu'
-                    : isOnline
-                    ? '● Đang trực tuyến tại sảnh'
-                    : `○ Ngoại tuyến (${formatLastSeen(profileUser.last_seen_at)})`}
+                    : '● Đang trực tuyến tại sảnh'}
                 </span>
               </div>
             </div>

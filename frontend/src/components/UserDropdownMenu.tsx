@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
   ChevronDown,
   KeyRound,
@@ -9,8 +10,8 @@ import { AppScreen, UserRecord } from '../types';
 
 interface UserDropdownMenuProps {
   user: UserRecord;
-  currentScreen: AppScreen;
-  onNavigate: (screen: AppScreen) => void;
+  currentScreen?: AppScreen;
+  onNavigate?: (screen: AppScreen) => void;
   onOpenChangePassword: () => void;
   onLogout: () => void;
 }
@@ -24,6 +25,11 @@ export const UserDropdownMenu: React.FC<UserDropdownMenuProps> = ({
 }) => {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  const isAdminActive =
+    currentScreen === 'admin' || location.pathname === '/admin';
 
   useEffect(() => {
     if (!open) return;
@@ -103,10 +109,14 @@ export const UserDropdownMenu: React.FC<UserDropdownMenuProps> = ({
                 role="menuitem"
                 onClick={() => {
                   setOpen(false);
-                  onNavigate('admin');
+                  if (onNavigate) {
+                    onNavigate('admin');
+                  } else {
+                    navigate('/admin');
+                  }
                 }}
                 className={`w-full px-2.5 py-1.5 rounded text-left text-xs flex items-center gap-2 transition cursor-pointer ${
-                  currentScreen === 'admin'
+                  isAdminActive
                     ? 'bg-accent text-accent-ink font-semibold'
                     : 'text-ink hover:bg-card/70 font-medium'
                 }`}

@@ -7,6 +7,7 @@ import {
   MatchRecord,
   MoveRecord,
 } from '../types';
+import { soundManager } from '../utils/sound';
 
 interface UseChessClockParams {
   screen: AppScreen;
@@ -37,9 +38,15 @@ export function useChessClock({
   const [whiteClockMs, setWhiteClockMs] = useState<number | null>(null);
   const [blackClockMs, setBlackClockMs] = useState<number | null>(null);
   const lastTurnStartRef = useRef<number>(Date.now());
+  const lastLowTimeSecRef = useRef<number>(-1);
   // Đồng hồ (ms) của bên đang đi tại thời điểm bắt đầu lượt — neo để tính
   // thời gian còn lại theo wall-clock, tránh lệch khi tab bị throttle/nghỉ.
   const turnStartClockRef = useRef<number | null>(null);
+
+  // Reset cảnh báo low time mỗi khi đổi lượt
+  useEffect(() => {
+    lastLowTimeSecRef.current = -1;
+  }, [turn]);
 
   // Đồng hồ Fischer đếm ngược khi ván đang playing và có giới hạn thời gian
   useEffect(() => {
@@ -48,6 +55,7 @@ export function useChessClock({
       phase !== 'playing' ||
       !activeMatch ||
       activeMatch.status !== 'playing' ||
+      activeMatch.is_paused ||
       activeMatch.initial_time_ms == null
     ) {
       return;
@@ -65,10 +73,17 @@ export function useChessClock({
       } else {
         setBlackClockMs(remaining);
       }
+
+      // Cảnh báo âm thanh khi còn dưới 10 giây (mỗi giây phát 1 lần)
+      const sec = Math.ceil(remaining / 1000);
+      if (!isSpectator && sec <= 10 && sec > 0 && lastLowTimeSecRef.current !== sec) {
+        lastLowTimeSecRef.current = sec;
+        soundManager.playLowTime();
+      }
     }, 250);
 
     return () => window.clearInterval(interval);
-  }, [screen, phase, activeMatch, turn]);
+  }, [screen, phase, activeMatch, turn, isSpectator]);
 
   // Phát hiện hết giờ (Timeout)
   useEffect(() => {
@@ -77,6 +92,7 @@ export function useChessClock({
       phase !== 'playing' ||
       !activeMatch ||
       activeMatch.status !== 'playing' ||
+      activeMatch.is_paused ||
       activeMatch.initial_time_ms == null ||
       isSpectator
     ) {

@@ -23,6 +23,8 @@ import {
   MessageSquare,
   Search,
   ArrowUpDown,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import { fetchLobbyApi } from '../api';
 import { useRealtime } from '../hooks/useRealtime';
@@ -209,6 +211,8 @@ export const TIME_PRESETS: TimePresetItem[] = [
   },
 ];
 
+export const QUICK_TIME_PRESET_IDS = ['1+0', '3+2', '5+3', '10+0', 'untimed'];
+
 const MAIA_ELOS = [1100, 1200, 1300, 1400, 1500, 1600, 1700, 1800, 1900];
 
 export function formatClockMs(ms?: number | null): string {
@@ -290,6 +294,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   const [allowHints, setAllowHints] = useState<boolean>(false);
   const [startTab, setStartTab] = useState<'standard' | 'preset'>('standard');
   const [selectedPresetId, setSelectedPresetId] = useState<string>('standard');
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [creating, setCreating] = useState(false);
 
   const nonStandardPresets = React.useMemo(
@@ -569,17 +574,19 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
     (p: UserRecord) => {
       const activeMatchId = activeMatchByUserId.get(p.id) || null;
       const waitingMatchId = waitingByUserId.get(p.id) || null;
-      const online =
-        isPlayerRecentlyOnline(p, currentUser.id) ||
-        Boolean(activeMatchId) ||
-        Boolean(waitingMatchId);
+      const online = isPlayerRecentlyOnline(p, currentUser.id);
 
       let state: 'in_match' | 'waiting' | 'available' | 'offline' = 'offline';
       let label = formatLastSeen(p.last_seen_at);
       let dotClass = 'bg-ink-3';
       let textClass = 'text-ink-3';
 
-      if (activeMatchId) {
+      if (!online) {
+        state = 'offline';
+        label = formatLastSeen(p.last_seen_at);
+        dotClass = 'bg-ink-3';
+        textClass = 'text-ink-3';
+      } else if (activeMatchId) {
         state = 'in_match';
         label = 'Đang đấu';
         dotClass = 'bg-amber-400 animate-pulse';
@@ -589,7 +596,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
         label = 'Chờ đấu';
         dotClass = 'bg-sky-400';
         textClass = 'text-sky-300';
-      } else if (online) {
+      } else {
         state = 'available';
         label = 'Online';
         dotClass = 'bg-emerald-400';
@@ -874,6 +881,30 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
 
           {/* 2. Vùng cuộn chính Cột Trái: Trận Tiêu Điểm + Danh sách Kỳ thủ Online */}
           <div className="flex-1 min-h-0 bg-panel border border-line rounded-xl p-3.5 flex flex-col gap-4 overflow-y-auto">
+            {/* Banner ván đấu đang tạm dừng của user hiện tại */}
+            {lobby?.my_paused_match && (
+              <div className="p-3 rounded-lg bg-amber-500/15 border border-amber-500/30 text-ink flex items-center justify-between gap-3 shrink-0">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse shrink-0" />
+                  <div className="min-w-0">
+                    <div className="text-xs font-semibold text-amber-300">
+                      Bạn có ván đấu đang tạm dừng (Time-out / Lưu trận)
+                    </div>
+                    <div className="text-[11px] text-ink-2 truncate">
+                      {lobby.my_paused_match.white_player.display_name} vs {lobby.my_paused_match.black_player.display_name} · {lobby.my_paused_match.match.total_plies} nước đi
+                    </div>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onOpenLiveMatch(lobby.my_paused_match!.match.id)}
+                  className="px-3 py-1 rounded bg-amber-500 hover:bg-amber-400 text-ink font-semibold text-xs transition cursor-pointer shrink-0"
+                >
+                  Tiếp tục ván đấu ↗
+                </button>
+              </div>
+            )}
+
             {/* 2A. Trận Tiêu Điểm (Featured Live Stream) */}
             <div className="space-y-3 shrink-0">
               <div className="flex items-center justify-between gap-2">
@@ -908,6 +939,11 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                     <span className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-inset border border-line text-[10px] text-ink-2 font-mono">
                       <Sparkles className="w-3 h-3 text-accent" />
                       Trận biểu diễn AI
+                    </span>
+                  )}
+                  {featuredMatch?.match.is_paused && (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[10px] font-mono">
+                      Tạm dừng (Time-out)
                     </span>
                   )}
                 </div>
@@ -1111,6 +1147,11 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                             </div>
                             <div className="flex items-center justify-between text-[10px] font-mono text-ink-3">
                               <span>{item.match.total_plies} ply</span>
+                              {item.match.is_paused && (
+                                <span className="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 font-semibold text-[9px]">
+                                  Tạm dừng
+                                </span>
+                              )}
                               <button
                                 type="button"
                                 onClick={(e) => {
@@ -1433,12 +1474,13 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
             CỘT PHẢI (lg: 5fr / 2xl: 4fr): TẠO TRẬN MỚI (TRÊN) + LỊCH SỬ ĐẤU
            ================================================================= */}
         <section className="lg:col-start-2 lg:row-start-1 flex flex-col gap-3.5 min-h-0 lg:h-full overflow-hidden">
-          {/* 1. Khối trên: Menu Tạo trận mới (đầy đủ tùy chỉnh như PreMatchDialog) */}
-          <div className="bg-panel border border-line rounded-xl p-3.5 space-y-2.5 lg:max-h-[64%] overflow-y-auto shrink-0">
-            <div className="flex items-center justify-between">
+          {/* 1. Khối trên: Menu Tạo trận mới (gọn gàng, nút Bắt đầu ghim ở Footer) */}
+          <div className="bg-panel border border-line rounded-xl flex flex-col shrink-0 overflow-hidden shadow-sm">
+            {/* Header: Tiêu đề + Liên kết Xếp cờ */}
+            <div className="px-3.5 py-2 flex items-center justify-between border-b border-line shrink-0">
               <div className="flex items-center gap-2">
                 <PlusCircle className="w-4 h-4 text-accent" />
-                <h2 className="font-display text-sm font-semibold text-ink">
+                <h2 className="font-display text-xs font-semibold text-ink">
                   Tạo trận đấu mới
                 </h2>
               </div>
@@ -1448,502 +1490,505 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                 className="text-[10px] text-accent hover:underline inline-flex items-center gap-1 cursor-pointer"
               >
                 <SlidersHorizontal className="w-3 h-3" />
-                Tự xếp cờ ↗
+                Xếp cờ FEN/PGN ↗
               </button>
             </div>
 
-            {/* 1. 3 Tab chế độ chơi (MODE_PRESETS) */}
-            <div className="grid grid-cols-3 gap-1.5 bg-inset p-1 rounded-lg border border-line">
-              {(
-                [
-                  ['online', 'Đấu Bạn Bè', <Users className="w-3.5 h-3.5" />],
-                  ['vs_ai', 'Đấu với AI', <Bot className="w-3.5 h-3.5" />],
+            {/* Body: Cuộn nội dung khi mở rộng tùy chọn, mặc định hoàn toàn vừa vặn */}
+            <div className="p-3 space-y-2.5 overflow-y-auto max-h-[360px] lg:max-h-[380px]">
+              {/* 1. 3 Tab chế độ chơi (MODE_PRESETS) */}
+              <div className="grid grid-cols-3 gap-1 bg-inset p-0.5 rounded-lg border border-line">
+                {(
                   [
-                    'training',
-                    'Học Tập',
-                    <GraduationCap className="w-3.5 h-3.5" />,
-                  ],
-                ] as const
-              ).map(([id, label, icon]) => {
-                const active = createMode === id;
-                return (
-                  <button
-                    key={id}
-                    type="button"
-                    onClick={() => handleSelectMode(id)}
-                    className={`py-1.5 px-2 rounded-md text-[11px] inline-flex items-center justify-center gap-1.5 transition cursor-pointer ${
-                      active
-                        ? 'bg-accent text-accent-ink font-semibold shadow-sm'
-                        : 'text-ink-2 hover:text-ink'
-                    }`}
-                  >
-                    {icon}
-                    <span className="truncate">{label}</span>
-                  </button>
-                );
-              })}
-            </div>
-
-            {/* Banner Đối thủ đang được chọn để Thách đấu trực tiếp */}
-            {createMode === 'online' && challengedPlayer && (
-              <div className="px-3 py-2 rounded-lg bg-accent/10 border border-accent flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2 min-w-0">
-                  <Swords className="w-3.5 h-3.5 text-accent shrink-0" />
-                  <div className="text-xs text-ink truncate">
-                    Thách đấu:{' '}
-                    <strong className="font-semibold">
-                      {challengedPlayer.display_name}
-                    </strong>{' '}
-                    <span className="font-mono text-[10px] text-ink-2">
-                      ({challengedPlayer.rating} Elo)
-                    </span>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setChallengedPlayer(null)}
-                  className="p-1 rounded hover:bg-card text-ink-2 hover:text-ink transition cursor-pointer"
-                  title="Bỏ chọn đối thủ (Tạo phòng chờ mở)"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            )}
-
-            {/* 2. Thế cờ xuất phát (Tiêu chuẩn | Thế cờ mẫu | Tự xếp cờ ↗) */}
-            <div className="bg-inset rounded-lg border border-line p-2 space-y-1.5">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-[10px] font-medium text-ink-2">
-                  Thế cờ xuất phát
-                </span>
-                <div className="inline-flex bg-card p-0.5 rounded border border-line text-[10px]">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setStartTab('standard');
-                      setSelectedPresetId('standard');
-                    }}
-                    className={`px-2 py-0.5 rounded-xs font-medium transition cursor-pointer ${
-                      startTab === 'standard'
-                        ? 'bg-accent text-accent-ink'
-                        : 'text-ink-2 hover:text-ink'
-                    }`}
-                  >
-                    Tiêu chuẩn
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setStartTab('preset');
-                      if (
-                        selectedPresetId === 'standard' &&
-                        nonStandardPresets[0]
-                      ) {
-                        setSelectedPresetId(nonStandardPresets[0].id);
-                        try {
-                          setSideChoice(
-                            new Chess(nonStandardPresets[0].fen).turn()
-                          );
-                        } catch {
-                          // ignore
-                        }
-                      }
-                    }}
-                    className={`px-2 py-0.5 rounded-xs font-medium transition cursor-pointer ${
-                      startTab === 'preset'
-                        ? 'bg-accent text-accent-ink'
-                        : 'text-ink-2 hover:text-ink'
-                    }`}
-                  >
-                    Thế cờ mẫu ({nonStandardPresets.length})
-                  </button>
-                  <button
-                    type="button"
-                    onClick={onOpenBoardEditor}
-                    className="px-2 py-0.5 rounded-xs font-medium text-ink-2 hover:text-ink inline-flex items-center gap-1 transition cursor-pointer"
-                    title="Mở công cụ Xếp cờ hoặc dán FEN/PGN"
-                  >
-                    <SlidersHorizontal className="w-3 h-3" />
-                    Tự xếp ↗
-                  </button>
-                </div>
-              </div>
-
-              {startTab === 'preset' && (
-                <div className="space-y-1">
-                  <div className="flex items-center gap-2">
-                    <select
-                      value={selectedPreset?.id || ''}
-                      onChange={(e) => {
-                        const nextId = e.target.value;
-                        setSelectedPresetId(nextId);
-                        const found = presets.find((p) => p.id === nextId);
-                        if (found) {
-                          try {
-                            setSideChoice(new Chess(found.fen).turn());
-                          } catch {
-                            // ignore
-                          }
-                        }
-                      }}
-                      className="flex-1 bg-card border border-line rounded px-2 py-1 text-[11px] text-ink focus:outline-none focus:border-accent cursor-pointer"
-                    >
-                      {nonStandardPresets.map((p) => (
-                        <option
-                          key={p.id}
-                          value={p.id}
-                          className="bg-card text-ink"
-                        >
-                          [{p.category}] {p.name}
-                        </option>
-                      ))}
-                    </select>
-                    <span className="shrink-0 text-[10px] font-mono px-1.5 py-0.5 rounded bg-card border border-line text-ink-2">
-                      Lượt: {startTurnSide === 'w' ? 'Trắng' : 'Đen'}
-                    </span>
-                  </div>
-                  {selectedPreset?.description && (
-                    <div className="text-[10px] text-ink-2 leading-snug">
-                      {selectedPreset.description}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* 3. Thời gian suy nghĩ (Fischer Clock) & Quân của bạn */}
-            <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
-              <div className="sm:col-span-7">
-                <div className="flex items-center justify-between gap-1 mb-1">
-                  <label className="text-[10px] text-ink-2 flex items-center gap-1 font-medium">
-                    <Clock className="w-3 h-3 text-accent" />
-                    Thời gian
-                  </label>
-                  <div className="flex items-center gap-0.5 text-[9px] font-mono">
-                    {(
-                      [
-                        ['all', 'Tất cả'],
-                        ['blitz', 'Chớp'],
-                        ['rapid', 'Nhanh'],
-                        ['bullet', 'Siêu chớp'],
-                        ['other', 'Tự do'],
-                      ] as const
-                    ).map(([catKey, catLabel]) => (
-                      <button
-                        key={catKey}
-                        type="button"
-                        onClick={() => setTimeCategory(catKey)}
-                        className={`px-1.5 py-0.5 rounded transition cursor-pointer ${
-                          timeCategory === catKey
-                            ? 'bg-accent text-accent-ink font-semibold shadow-xs'
-                            : 'text-ink-3 hover:text-ink hover:bg-card'
-                        }`}
-                      >
-                        {catLabel}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div className="grid grid-cols-3 sm:grid-cols-4 gap-1">
-                  {displayedTimePresets.map((tp) => {
-                    const active = timePresetId === tp.id;
-                    return (
-                      <button
-                        key={tp.id}
-                        type="button"
-                        onClick={() => setTimePresetId(tp.id)}
-                        className={`py-1 px-1 rounded border text-center transition cursor-pointer ${
-                          active
-                            ? 'bg-card border-accent ring-1 ring-accent text-ink font-semibold shadow-xs'
-                            : 'bg-inset border-line text-ink-2 hover:text-ink hover:border-line-strong'
-                        }`}
-                      >
-                        <div className="font-mono text-[11px] font-medium truncate">
-                          {tp.label}
-                        </div>
-                        <div className="text-[8px] text-ink-3 truncate">
-                          {tp.sub}
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div className="sm:col-span-5">
-                <label className="block text-[10px] text-ink-2 mb-1">
-                  Quân của bạn
-                </label>
-                <div className="grid grid-cols-3 gap-1 bg-inset p-1 rounded border border-line">
-                  {(
+                    ['online', 'Đấu Bạn Bè', <Users className="w-3.5 h-3.5" />],
+                    ['vs_ai', 'Đấu với AI', <Bot className="w-3.5 h-3.5" />],
                     [
-                      ['w', 'Trắng'],
-                      ['random', 'Ngẫu nhiên'],
-                      ['b', 'Đen'],
-                    ] as const
-                  ).map(([val, lbl]) => (
+                      'training',
+                      'Học Tập',
+                      <GraduationCap className="w-3.5 h-3.5" />,
+                    ],
+                  ] as const
+                ).map(([id, label, icon]) => {
+                  const active = createMode === id;
+                  return (
                     <button
-                      key={val}
+                      key={id}
                       type="button"
-                      onClick={() => setSideChoice(val)}
-                      className={`py-1.5 rounded text-[10px] transition cursor-pointer ${
-                        sideChoice === val
-                          ? 'bg-accent text-accent-ink font-semibold'
+                      onClick={() => handleSelectMode(id)}
+                      className={`py-1.5 px-2 rounded-md text-[11px] inline-flex items-center justify-center gap-1.5 transition cursor-pointer ${
+                        active
+                          ? 'bg-accent text-accent-ink font-semibold shadow-xs'
                           : 'text-ink-2 hover:text-ink'
                       }`}
                     >
-                      {lbl}
+                      {icon}
+                      <span className="truncate">{label}</span>
                     </button>
-                  ))}
-                </div>
+                  );
+                })}
               </div>
-            </div>
 
-            {/* 4. Cấu hình Đối thủ & Engine AI (khi ở vs_ai hoặc training) */}
-            {createMode !== 'online' ? (
-              <div className="bg-inset rounded-lg border border-line p-2.5 space-y-2">
-                {/* Ở chế độ Học Tập (training), cho phép chọn Máy (AI) hoặc 2 Người trên 1 máy */}
-                {createMode === 'training' && (
-                  <div className="flex items-center justify-between gap-2 pb-1.5 border-b border-line">
-                    <span className="text-[10px] font-medium text-ink-2">
-                      Đối thủ luyện tập
-                    </span>
-                    <div className="inline-flex bg-card p-0.5 rounded border border-line text-[10px]">
-                      <button
-                        type="button"
-                        onClick={() => setOpponentType('ai')}
-                        className={`px-2 py-0.5 rounded-xs font-medium inline-flex items-center gap-1 transition cursor-pointer ${
-                          opponentType === 'ai'
-                            ? 'bg-accent text-accent-ink'
-                            : 'text-ink-2 hover:text-ink'
-                        }`}
-                      >
-                        <Bot className="w-3 h-3" />
-                        Máy (AI)
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setOpponentType('human')}
-                        className={`px-2 py-0.5 rounded-xs font-medium inline-flex items-center gap-1 transition cursor-pointer ${
-                          opponentType === 'human'
-                            ? 'bg-accent text-accent-ink'
-                            : 'text-ink-2 hover:text-ink'
-                        }`}
-                      >
-                        <Users className="w-3 h-3" />
-                        2 Người (1 máy)
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {(createMode === 'vs_ai' || opponentType === 'ai') && (
-                  <>
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex gap-1">
-                        {(['maia', 'stockfish'] as const).map((eng) => (
-                          <button
-                            key={eng}
-                            type="button"
-                            onClick={() => {
-                              setAiEngine(eng);
-                              setAiElo(eng === 'maia' ? 1500 : 1800);
-                            }}
-                            className={`px-2.5 py-0.5 rounded text-[10px] font-medium transition cursor-pointer ${
-                              aiEngine === eng
-                                ? 'bg-accent text-accent-ink font-semibold'
-                                : 'bg-card text-ink-2 hover:text-ink'
-                            }`}
-                          >
-                            {eng === 'maia'
-                              ? 'Maia (Giống người)'
-                              : 'Stockfish 17'}
-                          </button>
-                        ))}
-                      </div>
-                      <span className="font-mono text-[11px] text-ink font-semibold tabular-nums">
-                        {aiElo} Elo
+              {/* Banner Đối thủ đang được chọn để Thách đấu trực tiếp */}
+              {createMode === 'online' && challengedPlayer && (
+                <div className="px-2.5 py-1.5 rounded-lg bg-accent/10 border border-accent flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <Swords className="w-3.5 h-3.5 text-accent shrink-0" />
+                    <div className="text-xs text-ink truncate">
+                      Thách đấu:{' '}
+                      <strong className="font-semibold">
+                        {challengedPlayer.display_name}
+                      </strong>{' '}
+                      <span className="font-mono text-[10px] text-ink-2">
+                        ({challengedPlayer.rating} Elo)
                       </span>
                     </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setChallengedPlayer(null)}
+                    className="p-1 rounded hover:bg-card text-ink-2 hover:text-ink transition cursor-pointer"
+                    title="Bỏ chọn đối thủ"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
 
-                    {aiEngine === 'maia' ? (
-                      <div className="space-y-1">
-                        <div className="grid grid-cols-9 gap-1">
-                          {MAIA_ELOS.map((lvl) => (
+              {/* 2. Dòng gom gọn: Thời gian & Chọn quân */}
+              <div className="bg-inset rounded-lg border border-line p-2 space-y-1.5">
+                <div className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-center">
+                  {/* Cột trái: Thời gian (7 phần) */}
+                  <div className="sm:col-span-7 space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-medium text-ink-2 flex items-center gap-1">
+                        <Clock className="w-3 h-3 text-accent" />
+                        Thời gian
+                      </span>
+                      <span className="text-[9px] font-mono text-ink-3">
+                        {TIME_PRESETS.find((t) => t.id === timePresetId)?.sub || ''}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1 flex-wrap">
+                      {QUICK_TIME_PRESET_IDS.map((pid) => {
+                        const tp = TIME_PRESETS.find((t) => t.id === pid);
+                        if (!tp) return null;
+                        const active = timePresetId === pid;
+                        return (
+                          <button
+                            key={pid}
+                            type="button"
+                            onClick={() => setTimePresetId(pid)}
+                            className={`px-1.5 py-0.5 rounded text-[10px] font-mono border transition cursor-pointer ${
+                              active
+                                ? 'bg-accent border-accent text-accent-ink font-semibold shadow-xs'
+                                : 'bg-card border-line text-ink-2 hover:text-ink'
+                            }`}
+                            title={`${tp.label} (${tp.sub})`}
+                          >
+                            {tp.label}
+                          </button>
+                        );
+                      })}
+                      <select
+                        value={
+                          QUICK_TIME_PRESET_IDS.includes(timePresetId)
+                            ? ''
+                            : timePresetId
+                        }
+                        onChange={(e) => {
+                          if (e.target.value) setTimePresetId(e.target.value);
+                        }}
+                        className={`px-1 py-0.5 rounded text-[9.5px] font-mono border transition cursor-pointer ${
+                          !QUICK_TIME_PRESET_IDS.includes(timePresetId)
+                            ? 'bg-accent/15 border-accent text-accent font-semibold'
+                            : 'bg-card border-line text-ink-3 hover:text-ink'
+                        }`}
+                      >
+                        <option
+                          value=""
+                          disabled={!QUICK_TIME_PRESET_IDS.includes(timePresetId)}
+                        >
+                          {QUICK_TIME_PRESET_IDS.includes(timePresetId)
+                            ? 'Khác...'
+                            : TIME_PRESETS.find((p) => p.id === timePresetId)
+                                ?.label || 'Khác'}
+                        </option>
+                        {TIME_PRESETS.filter(
+                          (p) => !QUICK_TIME_PRESET_IDS.includes(p.id)
+                        ).map((p) => (
+                          <option
+                            key={p.id}
+                            value={p.id}
+                            className="bg-card text-ink"
+                          >
+                            {p.label} ({p.sub})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Cột phải: Quân của bạn (5 phần) */}
+                  <div className="sm:col-span-5 space-y-1">
+                    <span className="text-[10px] font-medium text-ink-2 block">
+                      Quân của bạn
+                    </span>
+                    <div className="grid grid-cols-3 gap-0.5 bg-card p-0.5 rounded border border-line">
+                      {(
+                        [
+                          ['w', 'Trắng'],
+                          ['random', 'Random'],
+                          ['b', 'Đen'],
+                        ] as const
+                      ).map(([val, lbl]) => (
+                        <button
+                          key={val}
+                          type="button"
+                          onClick={() => setSideChoice(val)}
+                          className={`py-0.5 rounded-xs text-[10px] transition cursor-pointer text-center ${
+                            sideChoice === val
+                              ? 'bg-accent text-accent-ink font-semibold'
+                              : 'text-ink-2 hover:text-ink'
+                          }`}
+                        >
+                          {lbl}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* 3. Cấu hình Đối thủ & Engine AI (khi ở vs_ai hoặc training) */}
+              {createMode !== 'online' ? (
+                <div className="bg-inset rounded-lg border border-line p-2 space-y-1.5">
+                  {createMode === 'training' && (
+                    <div className="flex items-center justify-between pb-1 border-b border-line text-[10px]">
+                      <span className="font-medium text-ink-2">Đối thủ:</span>
+                      <div className="inline-flex bg-card p-0.5 rounded border border-line">
+                        <button
+                          type="button"
+                          onClick={() => setOpponentType('ai')}
+                          className={`px-1.5 py-0.5 rounded-xs transition cursor-pointer ${
+                            opponentType === 'ai'
+                              ? 'bg-accent text-accent-ink font-semibold'
+                              : 'text-ink-2 hover:text-ink'
+                          }`}
+                        >
+                          Máy (AI)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setOpponentType('human')}
+                          className={`px-1.5 py-0.5 rounded-xs transition cursor-pointer ${
+                            opponentType === 'human'
+                              ? 'bg-accent text-accent-ink font-semibold'
+                              : 'text-ink-2 hover:text-ink'
+                          }`}
+                        >
+                          2 Người (1 máy)
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {(createMode === 'vs_ai' || opponentType === 'ai') && (
+                    <>
+                      <div className="flex items-center justify-between gap-1 text-[10px]">
+                        <div className="flex gap-1">
+                          {(['maia', 'stockfish'] as const).map((eng) => (
                             <button
-                              key={lvl}
+                              key={eng}
                               type="button"
-                              onClick={() => setAiElo(lvl)}
-                              className={`py-0.5 rounded text-[10px] font-mono border transition cursor-pointer ${
-                                aiElo === lvl
-                                  ? 'bg-accent border-accent text-accent-ink font-semibold'
-                                  : 'bg-card border-line text-ink-2 hover:text-ink'
+                              onClick={() => {
+                                setAiEngine(eng);
+                                setAiElo(eng === 'maia' ? 1500 : 1800);
+                              }}
+                              className={`px-2 py-0.5 rounded font-medium transition cursor-pointer ${
+                                aiEngine === eng
+                                  ? 'bg-accent text-accent-ink font-semibold'
+                                  : 'bg-card text-ink-2 hover:text-ink border border-line'
                               }`}
                             >
-                              {lvl}
+                              {eng === 'maia' ? 'Maia (Tự nhiên)' : 'Stockfish 17'}
                             </button>
                           ))}
                         </div>
-                        {lc0Ready === false && (
-                          <div className="text-[10px] text-amber-300">
-                            ⚠ lc0 chưa sẵn sàng — Maia sẽ tạm dùng Stockfish giới
-                            hạn Elo tương đương.
-                          </div>
-                        )}
-                      </div>
-                    ) : (
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="range"
-                          min={1320}
-                          max={3190}
-                          step={50}
-                          value={aiElo}
-                          onChange={(e) => setAiElo(Number(e.target.value))}
-                          className="flex-1 accent-accent cursor-pointer"
-                        />
-                        <span className="font-mono text-[10px] text-ink-2">
-                          1320–3190
+                        <span className="font-mono text-ink font-semibold tabular-nums">
+                          {aiElo} Elo
                         </span>
                       </div>
-                    )}
-                  </>
-                )}
 
-                {createMode === 'vs_ai' && (
-                  <div className="flex items-center justify-between pt-1 border-t border-line text-[11px]">
-                    <span className="text-ink-2">
-                      Tính điểm Elo câu lạc bộ khi đấu với AI
-                    </span>
-                    <input
-                      type="checkbox"
-                      checked={isRated}
-                      onChange={(e) => setIsRated(e.target.checked)}
-                      className="accent-accent cursor-pointer"
-                    />
+                      {aiEngine === 'maia' ? (
+                        <div className="space-y-0.5">
+                          <div className="grid grid-cols-9 gap-0.5">
+                            {MAIA_ELOS.map((lvl) => (
+                              <button
+                                key={lvl}
+                                type="button"
+                                onClick={() => setAiElo(lvl)}
+                                className={`py-0.5 rounded text-[8.5px] font-mono border transition cursor-pointer ${
+                                  aiElo === lvl
+                                    ? 'bg-accent border-accent text-accent-ink font-semibold'
+                                    : 'bg-card border-line text-ink-2 hover:text-ink'
+                                }`}
+                              >
+                                {lvl}
+                              </button>
+                            ))}
+                          </div>
+                          {lc0Ready === false && (
+                            <div className="text-[9px] text-amber-300">
+                              ⚠ lc0 chưa sẵn sàng — dùng Stockfish giới hạn Elo tương đương.
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1.5">
+                          <input
+                            type="range"
+                            min={1320}
+                            max={3190}
+                            step={50}
+                            value={aiElo}
+                            onChange={(e) => setAiElo(Number(e.target.value))}
+                            className="flex-1 accent-accent cursor-pointer h-1.5"
+                          />
+                          <span className="font-mono text-[9px] text-ink-3 shrink-0">
+                            1320–3190
+                          </span>
+                        </div>
+                      )}
+                    </>
+                  )}
+
+                  {createMode === 'vs_ai' && (
+                    <div className="flex items-center justify-between pt-1 border-t border-line text-[10px]">
+                      <span className="text-ink-2">Tính điểm Elo câu lạc bộ</span>
+                      <input
+                        type="checkbox"
+                        checked={isRated}
+                        onChange={(e) => setIsRated(e.target.checked)}
+                        className="accent-accent cursor-pointer"
+                      />
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="flex items-center justify-between px-2.5 py-1.5 rounded-lg bg-inset border border-line text-[10.5px]">
+                  <span className="text-ink-2">Tính điểm Elo câu lạc bộ</span>
+                  <input
+                    type="checkbox"
+                    checked={isRated}
+                    onChange={(e) => setIsRated(e.target.checked)}
+                    className="accent-accent cursor-pointer"
+                  />
+                </div>
+              )}
+
+              {/* 4. Accordion Tùy chọn nâng cao (Thế cờ mẫu, Phân tích, Trợ giúp) */}
+              <div className="border border-line/80 rounded-lg overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => setShowAdvanced((v) => !v)}
+                  className="w-full flex items-center justify-between px-2.5 py-1.5 bg-inset/50 hover:bg-inset text-[10.5px] text-ink-2 hover:text-ink transition cursor-pointer"
+                >
+                  <span className="flex items-center gap-1.5 font-medium">
+                    <SlidersHorizontal className="w-3 h-3 text-accent" />
+                    Tùy chọn nâng cao
+                    {startTab === 'preset' && (
+                      <span className="text-[9.5px] text-accent font-normal truncate max-w-[140px]">
+                        · {selectedPreset?.name || 'Thế cờ mẫu'}
+                      </span>
+                    )}
+                  </span>
+                  <span className="flex items-center gap-0.5 text-[9.5px] text-ink-3">
+                    {showAdvanced ? (
+                      <>
+                        Thu gọn <ChevronUp className="w-3 h-3" />
+                      </>
+                    ) : (
+                      <>
+                        Mở rộng <ChevronDown className="w-3 h-3" />
+                      </>
+                    )}
+                  </span>
+                </button>
+
+                {showAdvanced && (
+                  <div className="p-2 space-y-2 bg-inset/20 border-t border-line text-[10px]">
+                    {/* Thế cờ xuất phát */}
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between gap-1">
+                        <span className="font-medium text-ink-2">Thế cờ:</span>
+                        <div className="inline-flex bg-card p-0.5 rounded border border-line">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setStartTab('standard');
+                              setSelectedPresetId('standard');
+                            }}
+                            className={`px-1.5 py-0.5 rounded-xs transition cursor-pointer ${
+                              startTab === 'standard'
+                                ? 'bg-accent text-accent-ink font-medium'
+                                : 'text-ink-2 hover:text-ink'
+                            }`}
+                          >
+                            Tiêu chuẩn
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setStartTab('preset');
+                              if (
+                                selectedPresetId === 'standard' &&
+                                nonStandardPresets[0]
+                              ) {
+                                setSelectedPresetId(nonStandardPresets[0].id);
+                                try {
+                                  setSideChoice(
+                                    new Chess(nonStandardPresets[0].fen).turn()
+                                  );
+                                } catch {
+                                  // ignore
+                                }
+                              }
+                            }}
+                            className={`px-1.5 py-0.5 rounded-xs transition cursor-pointer ${
+                              startTab === 'preset'
+                                ? 'bg-accent text-accent-ink font-medium'
+                                : 'text-ink-2 hover:text-ink'
+                            }`}
+                          >
+                            Thế cờ mẫu ({nonStandardPresets.length})
+                          </button>
+                        </div>
+                      </div>
+
+                      {startTab === 'preset' && (
+                        <div className="space-y-1 pt-1">
+                          <div className="flex items-center gap-1.5">
+                            <select
+                              value={selectedPreset?.id || ''}
+                              onChange={(e) => {
+                                const nextId = e.target.value;
+                                setSelectedPresetId(nextId);
+                                const found = presets.find((p) => p.id === nextId);
+                                if (found) {
+                                  try {
+                                    setSideChoice(new Chess(found.fen).turn());
+                                  } catch {
+                                    // ignore
+                                  }
+                                }
+                              }}
+                              className="flex-1 bg-card border border-line rounded px-1.5 py-1 text-[10px] text-ink focus:outline-none focus:border-accent cursor-pointer"
+                            >
+                              {nonStandardPresets.map((p) => (
+                                <option
+                                  key={p.id}
+                                  value={p.id}
+                                  className="bg-card text-ink"
+                                >
+                                  [{p.category}] {p.name}
+                                </option>
+                              ))}
+                            </select>
+                            <span className="shrink-0 text-[9px] font-mono px-1 py-0.5 rounded bg-card border border-line text-ink-2">
+                              Lượt: {startTurnSide === 'w' ? 'Trắng' : 'Đen'}
+                            </span>
+                          </div>
+                          {selectedPreset?.description && (
+                            <div className="text-[9.5px] text-ink-3 leading-snug">
+                              {selectedPreset.description}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Mức phân tích & Hỗ trợ (chỉ hiện khi không phải Online PvP) */}
+                    {createMode !== 'online' ? (
+                      <div className="space-y-1.5 pt-1 border-t border-line">
+                        <span className="font-medium text-ink-2 block">
+                          Mức phân tích engine:
+                        </span>
+                        <div className="grid grid-cols-3 gap-1 bg-card p-0.5 rounded border border-line">
+                          {(['off', 'eval_only', 'full'] as AnalysisLevel[]).map(
+                            (lvl) => {
+                              const meta = ANALYSIS_LEVEL_LABELS[lvl];
+                              const active = analysisLevel === lvl;
+                              return (
+                                <button
+                                  key={lvl}
+                                  type="button"
+                                  onClick={() => setAnalysisLevel(lvl)}
+                                  className={`py-1 rounded-xs font-medium text-center transition cursor-pointer ${
+                                    active
+                                      ? 'bg-accent text-accent-ink font-semibold'
+                                      : 'text-ink-2 hover:text-ink'
+                                  }`}
+                                  title={meta.description}
+                                >
+                                  {meta.label}
+                                </button>
+                              );
+                            }
+                          )}
+                        </div>
+
+                        <div className="flex items-center justify-between gap-2 pt-1 text-[10px]">
+                          <label className="inline-flex items-center gap-1 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={allowTakeback}
+                              onChange={(e) => setAllowTakeback(e.target.checked)}
+                              className="accent-accent"
+                            />
+                            <span className="text-ink-2">Đi lại nước</span>
+                          </label>
+                          <label className="inline-flex items-center gap-1 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={allowHints}
+                              onChange={(e) => setAllowHints(e.target.checked)}
+                              className="accent-accent"
+                            />
+                            <span className="text-ink-2">Gợi ý nước</span>
+                          </label>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="pt-1 border-t border-line text-[9.5px] text-ink-3 flex items-center gap-1">
+                        <Lock className="w-3 h-3 text-amber-400 shrink-0" />
+                        Đấu Bạn Bè: Tự động khóa phân tích &amp; hỗ trợ để đảm bảo công bằng.
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
-            ) : (
-              <div className="flex items-center justify-between px-2.5 py-1.5 rounded-lg bg-inset border border-line text-[11px]">
-                <span className="text-ink-2">
-                  Chế độ tính điểm Elo câu lạc bộ
-                </span>
-                <input
-                  type="checkbox"
-                  checked={isRated}
-                  onChange={(e) => setIsRated(e.target.checked)}
-                  className="accent-accent cursor-pointer"
-                />
-              </div>
-            )}
-
-            {/* 5. Mức phân tích khi đang chơi & Quyền hỗ trợ (Takeback / Hint) */}
-            <div className="bg-inset rounded-lg border border-line p-2.5 space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] font-medium text-ink-2">
-                  Mức phân tích khi đang chơi
-                </span>
-                {createMode === 'online' && (
-                  <span className="text-[10px] text-amber-300 inline-flex items-center gap-1">
-                    <Lock className="w-3 h-3" />
-                    Khóa khi Đấu Bạn Bè
-                  </span>
-                )}
-              </div>
-
-              <div className="grid grid-cols-3 gap-1.5">
-                {(['off', 'eval_only', 'full'] as AnalysisLevel[]).map(
-                  (lvl) => {
-                    const meta = ANALYSIS_LEVEL_LABELS[lvl];
-                    const effectiveLvl =
-                      createMode === 'online' ? 'off' : analysisLevel;
-                    const active = effectiveLvl === lvl;
-                    const disabled = createMode === 'online' && lvl !== 'off';
-                    return (
-                      <button
-                        key={lvl}
-                        type="button"
-                        disabled={disabled}
-                        onClick={() => setAnalysisLevel(lvl)}
-                        className={`p-1.5 rounded border text-left transition ${
-                          disabled
-                            ? 'opacity-35 cursor-not-allowed border-line bg-card/30'
-                            : active
-                            ? 'border-accent bg-card text-ink ring-1 ring-accent cursor-pointer'
-                            : 'border-line bg-card/40 text-ink-2 hover:text-ink cursor-pointer'
-                        }`}
-                        title={meta.description}
-                      >
-                        <div className="text-[10px] font-semibold truncate">
-                          {meta.label}
-                        </div>
-                        <div className="text-[9px] text-ink-3 truncate">
-                          {meta.description}
-                        </div>
-                      </button>
-                    );
-                  }
-                )}
-              </div>
-
-              {/* Quyền hỗ trợ: Đi lại nước (takeback) & Gợi ý (hint) */}
-              <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-line text-[11px]">
-                <label
-                  className={`inline-flex items-center gap-1.5 ${
-                    createMode === 'online'
-                      ? 'opacity-40 cursor-not-allowed'
-                      : 'cursor-pointer'
-                  }`}
-                >
-                  <input
-                    type="checkbox"
-                    disabled={createMode === 'online'}
-                    checked={createMode === 'online' ? false : allowTakeback}
-                    onChange={(e) => setAllowTakeback(e.target.checked)}
-                    className="accent-accent"
-                  />
-                  <span className="text-ink-2">
-                    Cho phép đi lại nước (takeback)
-                  </span>
-                </label>
-
-                <label
-                  className={`inline-flex items-center gap-1.5 ${
-                    createMode === 'online'
-                      ? 'opacity-40 cursor-not-allowed'
-                      : 'cursor-pointer'
-                  }`}
-                >
-                  <input
-                    type="checkbox"
-                    disabled={createMode === 'online'}
-                    checked={createMode === 'online' ? false : allowHints}
-                    onChange={(e) => setAllowHints(e.target.checked)}
-                    className="accent-accent"
-                  />
-                  <span className="text-ink-2">Cho phép gợi ý (hint)</span>
-                </label>
-              </div>
             </div>
 
-            <button
-              type="button"
-              disabled={creating}
-              onClick={handleTriggerCreate}
-              className="w-full py-2.5 rounded-lg bg-accent hover:opacity-90 disabled:opacity-50 text-accent-ink font-semibold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer"
-            >
-              <Swords className="w-3.5 h-3.5" />
-              {creating
-                ? 'Đang khởi tạo bàn cờ…'
-                : createMode === 'online'
-                ? challengedPlayer
-                  ? `Gửi Thách Đấu Tới ${challengedPlayer.display_name} ↗`
-                  : 'Mở Phòng Đấu Bạn Bè ↗'
-                : createMode === 'training'
-                ? 'Bắt Đầu Luyện Tập ↗'
-                : 'Bắt Đầu Ván Đấu ↗'}
-            </button>
+            {/* Footer ghim cố định: Nút Bắt đầu ván đấu */}
+            <div className="p-2.5 bg-inset/40 border-t border-line shrink-0">
+              <button
+                type="button"
+                disabled={creating}
+                onClick={handleTriggerCreate}
+                className="w-full py-2 px-3 rounded-lg bg-accent hover:opacity-90 disabled:opacity-50 text-accent-ink font-semibold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer shadow-sm"
+              >
+                <Swords className="w-3.5 h-3.5" />
+                {creating
+                  ? 'Đang khởi tạo bàn cờ…'
+                  : createMode === 'online'
+                  ? challengedPlayer
+                    ? `Thách Đấu ${challengedPlayer.display_name} ↗`
+                    : 'Mở Phòng Đấu Bạn Bè ↗'
+                  : createMode === 'training'
+                  ? 'Bắt Đầu Luyện Tập ↗'
+                  : 'Bắt Đầu Ván Đấu ↗'}
+              </button>
+            </div>
           </div>
 
           {/* 2. Khối dưới: Lịch sử đấu (Match History) */}

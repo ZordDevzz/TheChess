@@ -402,7 +402,7 @@ export async function takebackMatchApi(
   return res.json();
 }
 
-export type FinishMatchAction = 'resign' | 'timeout' | 'claim_draw';
+export type FinishMatchAction = 'resign' | 'timeout' | 'claim_draw' | 'pause' | 'resume';
 
 /**
  * Kết thúc ván theo HÀNH ĐỘNG — result do server tính từ biên bản & đồng hồ
@@ -421,6 +421,34 @@ export async function finishMatchApi(
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.detail || 'Không kết thúc được ván đấu.');
+  }
+  return res.json();
+}
+
+export async function pauseMatchApi(
+  matchId: string
+): Promise<MatchWithDetailsResponse> {
+  const res = await fetch(`${API_BASE}/matches/${matchId}/pause`, {
+    method: 'POST',
+    headers: authHeaders(),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Không thể tạm dừng ván đấu.');
+  }
+  return res.json();
+}
+
+export async function resumeMatchApi(
+  matchId: string
+): Promise<MatchWithDetailsResponse> {
+  const res = await fetch(`${API_BASE}/matches/${matchId}/resume`, {
+    method: 'POST',
+    headers: authHeaders(),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Không thể tiếp tục ván đấu.');
   }
   return res.json();
 }
@@ -701,12 +729,20 @@ export async function fetchNotificationsApi(): Promise<{
 }
 
 export async function markNotificationsReadApi(
-  notificationIds?: string[]
+  notificationIdsOrOpts?: string[] | { notificationIds?: string[]; kind?: string }
 ): Promise<{ marked: number; unread: number }> {
+  let ids: string[] | null = null;
+  let kind: string | null = null;
+  if (Array.isArray(notificationIdsOrOpts)) {
+    ids = notificationIdsOrOpts;
+  } else if (notificationIdsOrOpts) {
+    ids = notificationIdsOrOpts.notificationIds ?? null;
+    kind = notificationIdsOrOpts.kind ?? null;
+  }
   const res = await fetch(`${API_BASE}/notifications/read`, {
     method: 'POST',
     headers: authHeaders(),
-    body: JSON.stringify({ notification_ids: notificationIds ?? null }),
+    body: JSON.stringify({ notification_ids: ids, kind }),
   });
   if (!res.ok) throw new Error('Không cập nhật được trạng thái thông báo.');
   return res.json();

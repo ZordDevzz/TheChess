@@ -12,7 +12,8 @@ import {
   getRankBadge,
   formatLastSeen,
 } from '../gameUtils';
-import { GameConfig } from '../types';
+import { isPlayerRecentlyOnline } from '../components/HomeScreen';
+import { GameConfig, UserRecord } from '../types';
 
 test('detectGameOver: trả về null khi ván cờ đang tiếp diễn', () => {
   assert.equal(detectGameOver(STARTING_FEN), null);
@@ -246,4 +247,49 @@ test('formatLastSeen: định dạng nhãn thời gian online/offline', () => {
 
   const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
   assert.equal(formatLastSeen(fiveMinAgo), '5p trước');
+});
+
+test('isPlayerRecentlyOnline: xác định trạng thái online chính xác theo thời gian thực', () => {
+  const currentUserId = 'me-123';
+  const dummyUser = (id: string, lastSeen: string | null): UserRecord =>
+    ({
+      id,
+      username: 'test',
+      display_name: 'Test',
+      role: 'player',
+      is_active: true,
+      must_change_password: false,
+      token_version: 1,
+      is_bot: false,
+      rating: 1500,
+      peak_rating: 1500,
+      rating_deviation: 350,
+      games_played: 0,
+      wins: 0,
+      draws: 0,
+      losses: 0,
+      white_wins: 0,
+      black_wins: 0,
+      current_streak: 0,
+      best_win_streak: 0,
+      preferred_board_theme: 'classic',
+      preferred_piece_set: 'cburnett',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      last_seen_at: lastSeen,
+    } as UserRecord);
+
+  // 1. Chính mình luôn được tính là online
+  assert.equal(isPlayerRecentlyOnline(dummyUser('me-123', null), currentUserId), true);
+
+  // 2. Không có last_seen_at -> offline
+  assert.equal(isPlayerRecentlyOnline(dummyUser('other-1', null), currentUserId), false);
+
+  // 3. Vừa online 10 giây trước -> online
+  const justNow = new Date(Date.now() - 10 * 1000).toISOString();
+  assert.equal(isPlayerRecentlyOnline(dummyUser('other-2', justNow), currentUserId), true);
+
+  // 4. Đã offline 10 phút trước -> offline (không bị fake online)
+  const tenMinsAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+  assert.equal(isPlayerRecentlyOnline(dummyUser('other-3', tenMinsAgo), currentUserId), false);
 });

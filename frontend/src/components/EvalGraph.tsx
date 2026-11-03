@@ -33,16 +33,25 @@ export const EvalGraph: React.FC<EvalGraphProps> = React.memo(({
   const points = [
     { ply: 0, winWhite: 50, classification: undefined, color: undefined },
     ...moves.map((m) => ({
-      ply: m.ply,
-      winWhite: m.winPercentWhite ?? 50,
+      ply: typeof m.ply === 'number' && Number.isFinite(m.ply) ? m.ply : 0,
+      winWhite:
+        typeof m.winPercentWhite === 'number' && Number.isFinite(m.winPercentWhite)
+          ? m.winPercentWhite
+          : 50,
       classification: m.classification,
       color: m.color,
     })),
   ];
 
   const maxPly = Math.max(1, points.length - 1);
-  const toX = (ply: number) => (ply / maxPly) * width;
-  const toY = (winW: number) => height - 4 - ((winW / 100) * (height - 8));
+  const toX = (ply: number) => {
+    const p = Number.isFinite(ply) ? ply : 0;
+    return (p / maxPly) * width;
+  };
+  const toY = (winW: number) => {
+    const w = Number.isFinite(winW) ? winW : 50;
+    return height - 4 - ((w / 100) * (height - 8));
+  };
 
   const lineCoords = points
     .map((p) => `${toX(p.ply).toFixed(1)},${toY(p.winWhite).toFixed(1)}`)
@@ -50,6 +59,10 @@ export const EvalGraph: React.FC<EvalGraphProps> = React.memo(({
   const areaCoords = `0,${height} ${lineCoords} ${toX(
     points[points.length - 1].ply
   ).toFixed(1)},${height}`;
+  const safeCurrentPly =
+    typeof currentPly === 'number' && Number.isFinite(currentPly)
+      ? Math.max(0, Math.min(currentPly, maxPly))
+      : 0;
 
   return (
     <div className="shrink-0 bg-panel p-3.5 space-y-2">
@@ -125,9 +138,9 @@ export const EvalGraph: React.FC<EvalGraphProps> = React.memo(({
           />
           <polyline fill="none" stroke="var(--c-ink)" strokeWidth={1.8} points={lineCoords} />
           <line
-            x1={toX(currentPly)}
+            x1={toX(safeCurrentPly)}
             y1={0}
-            x2={toX(currentPly)}
+            x2={toX(safeCurrentPly)}
             y2={height}
             stroke={EVAL_CURSOR_COLOR}
             strokeWidth={1.8}

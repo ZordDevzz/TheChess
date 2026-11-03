@@ -16,7 +16,7 @@ import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import chess
 from fastapi import Body, Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
@@ -73,9 +73,26 @@ async def lifespan(app: FastAPI):
     except Exception:  # noqa: BLE001 - prune là best-effort, không chặn startup
         pass
     await lab_manager.start()
+    sweep_task = asyncio.create_task(_periodic_sweep_loop())
     yield
+    sweep_task.cancel()
+    try:
+        await sweep_task
+    except asyncio.CancelledError:
+        pass
     await lab_manager.shutdown()
     await engine_manager.shutdown()
+
+
+async def _periodic_sweep_loop() -> None:
+    while True:
+        try:
+            await asyncio.sleep(5)
+            await _sweep_stale_matches()
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            await asyncio.sleep(5)
 
 
 app = FastAPI(
@@ -486,28 +503,60 @@ class TopicHub:
     """
     Fan-out event theo topic (in-memory, gắn với 1 process — đủ cho 20-50 user;
     khi cần multi-worker, thay chỗ publish bằng Redis pub/sub adapter).
+    Theo dõi kết nối theo từng user để phát hiện trạng thái trực tuyến / ngoại tuyến chuẩn xác.
     """
 
     def __init__(self) -> None:
-        self._topics: Dict[str, Any] = {}
+        self._topics: Dict[str, Set[WebSocket]] = {}
+        self._user_sockets: Dict[str, Set[WebSocket]] = {}
+        self._socket_to_user: Dict[WebSocket, str] = {}
+        self._socket_topics: Dict[WebSocket, Set[str]] = {}
+
+    def is_user_connected(self, user_id: str) -> bool:
+        return bool(self._user_sockets.get(user_id))
+
+    def get_connected_user_ids(self) -> Set[str]:
+        return {uid for uid, socks in self._user_sockets.items() if socks}
+
+    async def register_user(self, websocket: WebSocket, user_id: str) -> None:
+        await websocket.accept()
+        self._user_sockets.setdefault(user_id, set()).add(websocket)
+        self._socket_to_user[websocket] = user_id
+        self._socket_topics.setdefault(websocket, set())
 
     async def register(self, websocket: WebSocket) -> None:
         await websocket.accept()
+        self._socket_topics.setdefault(websocket, set())
 
     def subscribe(self, topic: str, websocket: WebSocket) -> None:
         self._topics.setdefault(topic, set()).add(websocket)
+        self._socket_topics.setdefault(websocket, set()).add(topic)
 
     def unsubscribe(self, topic: str, websocket: WebSocket) -> None:
         subs = self._topics.get(topic)
-        if subs is None:
-            return
-        subs.discard(websocket)
-        if not subs:
-            self._topics.pop(topic, None)
+        if subs is not None:
+            subs.discard(websocket)
+            if not subs:
+                self._topics.pop(topic, None)
+        if websocket in self._socket_topics:
+            self._socket_topics[websocket].discard(topic)
 
-    def disconnect(self, websocket: WebSocket) -> None:
-        for topic in list(self._topics):
-            self.unsubscribe(topic, websocket)
+    def disconnect(self, websocket: WebSocket) -> Optional[str]:
+        user_id = self._socket_to_user.pop(websocket, None)
+        if user_id and user_id in self._user_sockets:
+            self._user_sockets[user_id].discard(websocket)
+            if not self._user_sockets[user_id]:
+                self._user_sockets.pop(user_id, None)
+
+        topics = self._socket_topics.pop(websocket, set())
+        for topic in topics:
+            subs = self._topics.get(topic)
+            if subs is not None:
+                subs.discard(websocket)
+                if not subs:
+                    self._topics.pop(topic, None)
+
+        return user_id
 
     async def publish(self, topic: str, payload: Dict[str, Any]) -> None:
         for websocket in list(self._topics.get(topic, ())):
@@ -697,9 +746,13 @@ async def _notify_user(
     if not user_id:
         return
     try:
-        # 'turn' chỉ giữ 1 tin chưa đọc mới nhất — nước sau thay thế nước trước.
+        # 'turn' chỉ giữ 1 tin duy nhất cho ván này — xóa turn cũ của ván để tránh spam DB & chuông
         if kind == "turn":
-            db_manager.mark_notifications_read(user_id, kind="turn")
+            match_id = (payload or {}).get("match_id")
+            if match_id:
+                db_manager.delete_notifications(user_id=user_id, kind="turn", match_id=match_id)
+            else:
+                db_manager.delete_notifications(user_id=user_id, kind="turn")
         db_manager.create_notification(user_id, kind, payload)
         await topic_hub.publish(
             f"user:{user_id}",
@@ -711,6 +764,11 @@ async def _notify_user(
 
 async def _notify_match_finished(match_id: str) -> None:
     """Thông báo kết thúc ván cho cả 2 kỳ thủ (bỏ qua bot)."""
+    # Ván đã kết thúc — dọn sạch toàn bộ notification 'turn' còn sót lại của ván này
+    try:
+        db_manager.delete_notifications(kind="turn", match_id=match_id)
+    except Exception:  # noqa: BLE001
+        pass
     match = db_manager.get_match_record(match_id)
     if not match:
         return
@@ -738,6 +796,21 @@ async def _notify_turn_if_human(match_id: str) -> None:
         )
 
 
+async def _sweep_stale_matches() -> None:
+    """Quét và giải phóng các ván đấu bị cạn giờ hoặc bỏ rơi (mất kết nối)."""
+    try:
+        finished, aborted = db_manager.sweep_stale_matches()
+        for m in finished:
+            await _notify_match_finished(m.id)
+            await _broadcast_match_event(m.id, "match_finished")
+        for m in aborted:
+            await _broadcast_match_event(m.id, "match_aborted")
+        if finished or aborted:
+            await _publish_lobby_event(reason="sweep_cleanup")
+    except Exception:
+        pass
+
+
 @app.websocket("/api/ws")
 async def ws_app_channel(
     websocket: WebSocket,
@@ -763,11 +836,18 @@ async def ws_app_channel(
         await websocket.close(code=4401)
         return
 
-    await topic_hub.register(websocket)
+    await topic_hub.register_user(websocket, user.id)
+    affected_match_ids = db_manager.set_user_connection_state(user.id, connected=True)
+    for mid in affected_match_ids:
+        await _broadcast_match_event(mid, "match_updated")
+    if affected_match_ids:
+        await _publish_lobby_event(reason="presence_changed")
+
     try:
         while True:
             message = await websocket.receive_text()
             if message == "ping":
+                db_manager.touch_user_last_seen(user.id)
                 await websocket.send_json({"type": "pong"})
                 continue
             try:
@@ -795,7 +875,12 @@ async def ws_app_channel(
     except WebSocketDisconnect:
         pass
     finally:
-        topic_hub.disconnect(websocket)
+        user_id = topic_hub.disconnect(websocket)
+        if user_id and not topic_hub.is_user_connected(user_id):
+            affected_match_ids = db_manager.set_user_connection_state(user_id, connected=False)
+            for mid in affected_match_ids:
+                await _broadcast_match_event(mid, "match_updated")
+            await _publish_lobby_event(reason="presence_changed")
 
 
 @app.websocket("/api/ws/matches/{match_id}")
@@ -950,6 +1035,9 @@ async def get_lobby(
     - `bots`: Danh sách các tài khoản Bot AI để tạo trận.
     - `stats`: Chỉ số tổng quan của hệ thống.
     """
+    # 0. Quét dọn các ván đấu cạn giờ / bỏ rơi trước khi trả danh sách
+    await _sweep_stale_matches()
+
     waiting = db_manager.list_match_summaries(statuses=["waiting"], limit=20)
     live = db_manager.list_match_summaries(statuses=["playing"], limit=20)
 
@@ -996,28 +1084,75 @@ async def get_lobby(
 
     live.sort(key=_live_sort_key)
 
-    human_live = [m for m in live if not m.is_system_exhibition]
+    # Lọc danh sách bàn đấu đang diễn ra:
+    # Ẩn các ván vs AI đang tạm dừng (save game) để tránh rác Sảnh.
+    # Ván Human vs Human đang tạm dừng VẪN HIỆN để mọi người chủ động chọn xem.
+    filtered_live = [
+        m
+        for m in live
+        if not (
+            m.match.is_paused
+            and (m.white_player.is_bot or m.black_player.is_bot)
+        )
+    ]
+
+    now_ts = time.time()
+    human_live = [m for m in filtered_live if not m.is_system_exhibition]
+
+    def _is_active_human_match(item: MatchSummaryItem) -> bool:
+        m = item.match
+        if m.is_paused:
+            return False
+        w_online = topic_hub.is_user_connected(m.white_user_id) or (
+            bool(item.white_player.last_seen_at)
+            and (_parse_ts(item.white_player.last_seen_at) >= now_ts - 180)
+        )
+        b_online = topic_hub.is_user_connected(m.black_user_id) or (
+            bool(item.black_player.last_seen_at)
+            and (_parse_ts(item.black_player.last_seen_at) >= now_ts - 180)
+        )
+        if not w_online and not b_online:
+            return False
+
+        anchor_val = m.last_move_at or m.started_at or m.created_at
+        if anchor_val and (_parse_ts(anchor_val) < now_ts - 180):
+            return False
+        return True
+
+    active_human_live = [m for m in human_live if _is_active_human_match(m)]
     featured: Optional[MatchSummaryItem] = None
 
-    if human_live:
-        # Ưu tiên trận mà chính user đang tham gia, nếu không thì lấy trận mới nhất của người chơi
-        my_live = [
-            m
-            for m in human_live
-            if m.match.white_user_id == user.id or m.match.black_user_id == user.id
-        ]
-        featured = my_live[0] if my_live else human_live[0]
+    # Tìm ván đang tạm dừng của chính user (để hiển thị banner tiếp tục/chơi mới)
+    my_paused_matches = [
+        m
+        for m in live
+        if m.match.is_paused
+        and (m.match.white_user_id == user.id or m.match.black_user_id == user.id)
+    ]
+    my_paused_match = my_paused_matches[0] if my_paused_matches else None
+
+    # Ưu tiên 1: Trận đang chơi của chính user hiện tại (chỉ khi chưa tạm dừng)
+    my_live = [
+        m
+        for m in human_live
+        if not m.match.is_paused
+        and (m.match.white_user_id == user.id or m.match.black_user_id == user.id)
+    ]
+    if my_live:
+        featured = my_live[0]
+    elif active_human_live:
+        # Ưu tiên 2: Trận của người chơi thật đang có hoạt động tích cực (không feature trận tạm dừng)
+        featured = active_human_live[0]
     else:
-        # Trận biểu diễn AI vs AI do LabManager chạy nền bằng engine thật
-        # (`step_exhibition=false` chỉ đọc, không tạo trận mới — dùng trong test).
+        # Ưu tiên 3: Stream trận biểu diễn AI vs AI sống động thay vì bàn cờ bất động
         if step_exhibition:
             featured = await lab_manager.ensure_exhibition(viewer_elo=user.rating)
             live = db_manager.list_match_summaries(statuses=["playing"], limit=20)
             live.sort(key=_live_sort_key)
             if not featured and live:
                 featured = live[0]
-        elif live:
-            featured = live[0]
+        elif filtered_live:
+            featured = filtered_live[0]
 
     my_history = db_manager.list_match_summaries(
         statuses=["finished"], user_id=user.id, limit=25
@@ -1034,12 +1169,6 @@ async def get_lobby(
     bots = [u for u in all_users if u.is_bot]
     human_players = [u for u in all_users if not u.is_bot and u.is_active]
 
-    # Phân loại presence + sort ỔN ĐỊNH cho danh sách Kỳ thủ trên Sảnh.
-    # Trước đây sort theo last_seen_at — trường này bị cập nhật ở MỌI request
-    # (verify token) nên thứ tự nhảy liên tục mỗi lần lobby refetch.
-    # Giờ: Đang đấu > Phòng chờ > Trực tuyến (5 phút) > Ngoại tuyến,
-    # trong nhóm xếp theo Elo giảm dần (tie-break username) — không phụ thuộc
-    # trường nào volatile.
     playing_ids = {
         uid
         for m in human_live
@@ -1052,28 +1181,28 @@ async def get_lobby(
         for uid in (w.match.white_user_id, w.match.black_user_id)
         if uid
     }
-    now_ts = time.time()
 
     def _presence_rank(u) -> int:  # 0 = hoạt động nhất
+        # User ngoại tuyến thì luôn xếp chót (rank 3), không bao giờ giả lập đang đấu hoặc online
+        is_online = topic_hub.is_user_connected(u.id) or (
+            bool(u.last_seen_at) and (_parse_ts(u.last_seen_at) >= now_ts - 5 * 60)
+        )
+        if not is_online:
+            return 3
+
         if u.id in playing_ids:
             return 0
         if u.id in waiting_ids:
             return 1
-        if u.last_seen_at:
-            try:
-                seen = datetime.fromisoformat(u.last_seen_at).timestamp()
-                if now_ts - seen <= 5 * 60:
-                    return 2
-            except ValueError:
-                pass
-        return 3
+        return 2
 
     human_players.sort(key=lambda u: (_presence_rank(u), -u.rating, u.username))
 
     return {
         "waiting_matches": waiting,
-        "live_matches": live,
+        "live_matches": filtered_live,
         "featured_match": featured,
+        "my_paused_match": my_paused_match,
         "my_history": my_history,
         "ai_history": ai_history,
         "club_history": club_history,
@@ -1268,6 +1397,19 @@ async def append_match_move_endpoint(
         # Trọng tài server-side nằm trong append_move: nếu nước này khép lại ván
         # (kể cả hòa claim 3-lần-lặp / 50 nước) match được chấm ngay tại đây.
         db_manager.append_move(match_id, req)
+
+        # Người vừa đi nước đã xong lượt -> xóa notification 'turn' của họ trong ván này
+        mover_id = req.player_user_id
+        if mover_id:
+            try:
+                db_manager.delete_notifications(user_id=mover_id, kind="turn", match_id=match_id)
+                await topic_hub.publish(
+                    f"user:{mover_id}",
+                    {"topic": f"user:{mover_id}", "type": "notification", "kind": "turn_cleared"},
+                )
+            except Exception:  # noqa: BLE001
+                pass
+
         details = db_manager.get_match_with_details(match_id)
         assert details is not None
         if details.match.status == "finished":
@@ -1354,6 +1496,18 @@ async def finish_match_endpoint(
                     status_code=409,
                     detail="Đồng hồ của bên đang đi chưa hết giờ.",
                 )
+        elif req.action == "pause":
+            db_manager.pause_match(match_id, paused_by_user_id=user.id)
+            details = db_manager.get_match_with_details(match_id)
+            assert details is not None
+            await _broadcast_match_event(match_id, "match_paused")
+            return details
+        elif req.action == "resume":
+            db_manager.resume_match(match_id)
+            details = db_manager.get_match_with_details(match_id)
+            assert details is not None
+            await _broadcast_match_event(match_id, "match_resumed")
+            return details
         else:  # claim_draw — server tự chứng minh thế cờ có hòa hợp lệ
             settled = db_manager.settle_match_if_over(match_id)
             if settled is None:
@@ -1366,6 +1520,42 @@ async def finish_match_endpoint(
         details = db_manager.get_match_with_details(match_id)
         assert details is not None
         await _broadcast_match_event(match_id, "match_finished")
+        return details
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/matches/{match_id}/pause", response_model=MatchWithDetailsResponse)
+async def pause_match_endpoint(
+    match_id: str,
+    user: UserRecord = Depends(get_current_user),
+) -> MatchWithDetailsResponse:
+    _require_match_participant(match_id, user)
+    try:
+        db_manager.pause_match(match_id, paused_by_user_id=user.id)
+        details = db_manager.get_match_with_details(match_id)
+        assert details is not None
+        await _broadcast_match_event(match_id, "match_paused")
+        return details
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/matches/{match_id}/resume", response_model=MatchWithDetailsResponse)
+async def resume_match_endpoint(
+    match_id: str,
+    user: UserRecord = Depends(get_current_user),
+) -> MatchWithDetailsResponse:
+    _require_match_participant(match_id, user)
+    try:
+        db_manager.resume_match(match_id)
+        details = db_manager.get_match_with_details(match_id)
+        assert details is not None
+        await _broadcast_match_event(match_id, "match_resumed")
         return details
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -1403,6 +1593,7 @@ class ChatMessageRequest(BaseModel):
 
 class MarkNotificationsReadRequest(BaseModel):
     notification_ids: Optional[List[str]] = None
+    kind: Optional[str] = None
 
 
 def _authorize_chat_access(topic: str, user: UserRecord) -> None:
@@ -1537,8 +1728,8 @@ async def mark_notifications_read_endpoint(
     req: MarkNotificationsReadRequest,
     user: UserRecord = Depends(get_current_user),
 ) -> Dict[str, Any]:
-    """Đánh dấu đã đọc: truyền `notification_ids` cụ thể, hoặc bỏ trống = tất cả."""
-    marked = db_manager.mark_notifications_read(user.id, req.notification_ids)
+    """Đánh dấu đã đọc: truyền `notification_ids` cụ thể, `kind`, hoặc bỏ trống = tất cả."""
+    marked = db_manager.mark_notifications_read(user.id, req.notification_ids, kind=req.kind)
     return {
         "marked": marked,
         "unread": db_manager.count_unread_notifications(user.id),
@@ -1701,5 +1892,19 @@ async def admin_abort_match(
 
 FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 if FRONTEND_DIST.exists():
-    app.mount("/", StaticFiles(directory=str(FRONTEND_DIST), html=True), name="frontend")
+    from starlette.exceptions import HTTPException as StarletteHTTPException
+
+    class SinglePageAppStaticFiles(StaticFiles):
+        async def get_response(self, path: str, scope):
+            try:
+                response = await super().get_response(path, scope)
+                if response.status_code == 404 and not path.startswith("api"):
+                    return await super().get_response("index.html", scope)
+                return response
+            except StarletteHTTPException as ex:
+                if ex.status_code == 404 and not path.startswith("api"):
+                    return await super().get_response("index.html", scope)
+                raise ex
+
+    app.mount("/", SinglePageAppStaticFiles(directory=str(FRONTEND_DIST), html=True), name="frontend")
 
