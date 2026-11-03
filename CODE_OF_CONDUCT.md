@@ -1,39 +1,41 @@
-# Quy tắc Ứng xử Cộng đồng (Code of Conduct)
+# Contributor Covenant Code of Conduct
 
-## Cam kết của chúng tôi
+## Our Pledge
 
-Với tư cách là những thành viên đóng góp và duy trì dự án **TheChess**, chúng tôi cam kết tạo ra một môi trường mở, hòa nhập, tôn trọng và không có sự quấy rối cho tất cả mọi người, bất kể độ tuổi, kích thước cơ thể, tình trạng khuyết tật, sắc tộc, bản dạng và biểu hiện giới, mức độ kinh nghiệm, trình độ học vấn, địa vị kinh tế xã hội, quốc tịch, diện mạo cá nhân, chủng tộc, đẳng cấp, màu da, tôn giáo, hoặc xu hướng tính dục.
+We as members, contributors, and leaders pledge to make participation in our community a harassment-free experience for everyone, regardless of age, body size, visible or invisible disability, ethnicity, sex characteristics, gender identity and expression, level of experience, education, socio-economic status, nationality, personal appearance, race, caste, color, religion, or sexual identity and orientation.
 
-Chúng tôi cam kết hành xử và tương tác theo các chuẩn mực góp phần xây dựng một cộng đồng cởi mở, thân thiện, đa dạng, toàn diện và lành mạnh.
+We pledge to act and interact in ways that contribute to an open, welcoming, diverse, inclusive, and healthy community.
 
-## Tiêu chuẩn của chúng tôi
+## Our Standards
 
-Các hành vi góp phần tạo nên môi trường tích cực bao gồm:
-* Thể hiện sự thấu hiểu và tôn trọng quan điểm, trải nghiệm của người khác.
-* Đưa ra và tiếp nhận các phản hồi mang tính xây dựng một cách hòa nhã.
-* Chấp nhận trách nhiệm và sẵn sàng xin lỗi những người bị ảnh hưởng bởi lỗi lầm của bản thân, đồng thời học hỏi từ những trải nghiệm đó.
-* Tập trung vào những gì tốt nhất không chỉ cho cá nhân mà còn cho toàn thể cộng đồng dự án.
-* Sử dụng ngôn ngữ trung tính, lịch sự và tôn trọng trong các cuộc thảo luận kỹ thuật.
+Examples of behavior that contributes to a positive environment for our community include:
 
-Các hành vi không thể chấp nhận bao gồm:
-* Sử dụng ngôn ngữ hoặc hình ảnh khêu gợi tình dục, hoặc các hành vi tiếp cận/gạ gẫm tình dục dưới bất kỳ hình thức nào.
-* Trolling, bình luận xúc phạm, công kích cá nhân hoặc công kích chính trị.
-* Quấy rối công khai hoặc riêng tư.
-* Tiết lộ thông tin cá nhân của người khác (như địa chỉ thực tế hoặc địa chỉ thư điện tử) khi chưa có sự cho phép rõ ràng.
-* Các hành vi khác có thể được coi là không phù hợp một cách hợp lý trong bối cảnh nghề nghiệp.
+* Demonstrating empathy and kindness toward other people
+* Being respectful of differing opinions, viewpoints, and experiences
+* Giving and gracefully accepting constructive feedback
+* Accepting responsibility and apologizing to those affected by our mistakes, and learning from the experience
+* Focusing on what is best not just for us as individuals, but for the overall community
 
-## Trách nhiệm Thực thi
+Examples of unacceptable behavior include:
 
-Những người duy trì dự án có trách nhiệm làm rõ và thực thi các tiêu chuẩn ứng xử được chấp nhận. Họ có quyền và trách nhiệm loại bỏ, chỉnh sửa hoặc từ chối các nhận xét, cam kết (commits), mã nguồn, chỉnh sửa wiki, báo cáo lỗi (issues) và các đóng góp khác không phù hợp với Quy tắc ứng xử này.
+* The use of sexualized language or imagery, and sexual attention or advances of any kind
+* Trolling, insulting or derogatory comments, and personal or political attacks
+* Public or private harassment
+* Publishing others' private information, such as a physical or email address, without their explicit permission
+* Other conduct which could reasonably be considered inappropriate in a professional setting
 
-## Phạm vi Áp dụng
+## Enforcement Responsibilities
 
-Quy tắc ứng xử này áp dụng trong mọi không gian liên quan đến dự án, cũng như khi một cá nhân chính thức đại diện cho dự án ở các không gian công cộng.
+Community leaders are responsible for clarifying and enforcing our standards of acceptable behavior and will take appropriate and fair corrective action in response to any behavior that they deem inappropriate, threatening, offensive, or harmful.
 
-## Báo cáo và Xử lý Vi phạm
+## Scope
 
-Các trường hợp có hành vi lạm dụng, quấy rối hoặc các hành vi không thể chấp nhận khác có thể được báo cáo tới đội ngũ duy trì dự án thông qua kênh bảo mật hoặc thư điện tử tại [dev@thechess.local]. Mọi khiếu nại sẽ được xem xét và điều tra một cách công bằng, bảo mật và kịp thời.
+This Code of Conduct applies within all community spaces, and also applies when an individual is officially representing the community in public spaces.
 
-## Tham chiếu
+## Contact
 
-Quy tắc ứng xử này được điều chỉnh dựa trên [Contributor Covenant](https://www.contributor-covenant.org), phiên bản 2.1.
+Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the repository maintainer at [quangsang.red@gmail.com].
+
+## Attribution
+
+This Code of Conduct is adapted from the [Contributor Covenant](https://www.contributor-covenant.org), version 2.1.

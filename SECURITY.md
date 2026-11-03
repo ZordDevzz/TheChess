@@ -1,27 +1,20 @@
-# Chính sách Bảo mật (Security Policy)
+# Security Policy
 
-## Phiên bản được Hỗ trợ
+## Supported Versions
 
-Dự án TheChess cam kết theo dõi và xử lý các vấn đề bảo mật trên các phiên bản đang được duy trì tích cực.
-
-| Phiên bản | Trạng thái hỗ trợ |
+| Version | Supported |
 | :--- | :--- |
-| 1.x (nhánh `master`) | :white_check_mark: Được hỗ trợ |
-| < 1.0 | :x: Không hỗ trợ |
+| `master` | :white_check_mark: |
 
-## Báo cáo Lỗ hổng Bảo mật
+## Reporting a Vulnerability
 
-Nếu bạn phát hiện ra một lỗ hổng bảo mật tiềm ẩn trong TheChess, vui lòng không mở công khai Issue trên GitHub nhằm bảo vệ người dùng của dự án. Thay vào đó, hãy thực hiện theo quy trình sau:
+If you discover a potential security issue in TheChess, please report it responsibly by contacting:
 
-1. **Gửi báo cáo riêng tư**: Gửi thông tin chi tiết về lỗ hổng tới địa chỉ thư điện tử: `dev@thechess.local` hoặc sử dụng tính năng **Private Vulnerability Reporting** trên thẻ Security của kho chứa GitHub.
-2. **Nội dung báo cáo**:
-   - Mô tả ngắn gọn về bản chất của lỗ hổng.
-   - Các bước tái hiện (reproduction steps) hoặc Proof of Concept (PoC) tối thiểu.
-   - Đánh giá sơ bộ về phạm vi ảnh hưởng (ví dụ: rò rỉ dữ liệu, giả mạo quyền truy cập, từ chối dịch vụ DoS).
-   - Đề xuất giải pháp khắc phục (nếu có).
+* Email: [quangsang.red@gmail.com]
+* Or via GitHub Private Vulnerability Reporting on this repository.
 
-## Cam kết Phản hồi
+Please include:
+* A description of the issue and potential impact
+* Minimal steps or proof of concept to reproduce
 
-- **Xác nhận**: Đội ngũ duy trì sẽ xác nhận đã tiếp nhận báo cáo trong vòng 48 giờ làm việc.
-- **Đánh giá & Khắc phục**: Sau khi xác thực lỗ hổng, chúng tôi sẽ tiến hành phát triển bản vá trên nhánh bảo mật nội bộ và thông báo tiến độ tới người báo cáo.
-- **Công bố**: Khi bản vá được kiểm thử đầy đủ và phát hành phiên bản mới, thông tin lỗ hổng và lời cảm ơn người báo cáo sẽ được công bố chính thức theo nguyên tắc Tiết lộ có trách nhiệm (Responsible Disclosure).
+We will acknowledge receipt within 48 hours and work on a fix promptly. Please do not open public issues for sensitive security vulnerabilities.
